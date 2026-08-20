@@ -442,6 +442,27 @@ select.field {
   transition: opacity 0.2s;
 }
 
+/*
+ * 換頁骨架 — 所有頁面都是 force-dynamic,伺服器回應前畫面不會動,
+ * 沒有這層就會看起來像卡住。只表示「正在載入」,不假裝知道實際有幾筆資料。
+ * prefers-reduced-motion 的全域規則會把下面的脈動關掉,留一塊靜態灰色。
+ */
+.skeleton {
+  background: var(--surface-sunken);
+  border-radius: var(--radius-control);
+  animation: skeleton-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes skeleton-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
 .sr-only {
   position: absolute;
   width: 1px;

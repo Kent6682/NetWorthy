@@ -1,3 +1,4 @@
+import { cache } from 'react';
 import { createClient } from './supabase/server.ts';
 import type { StockTransaction } from './holdings.ts';
 import type { AccountBalance, LatestPrice, NetWorthSnapshot, Profile, Stock } from './types.ts';
@@ -8,34 +9,43 @@ export function parseScope(value: string | undefined): Scope {
   return value === 'family' ? 'family' : 'me';
 }
 
-/** 目前登入者與其家庭成員 */
-export async function getSession() {
+/**
+ * 目前登入者與其家庭成員。
+ *
+ * 用 cache() 包住:同一個請求裡 layout 與頁面都會呼叫這支,
+ * 沒有這層的話 auth.getUser() 與成員查詢會整組跑兩次。
+ * cache() 的作用範圍是單一請求,不會跨請求或跨使用者共用。
+ */
+export const getSession = cache(async () => {
   const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return null;
 
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('id, household_id, display_name')
-    .eq('id', user.id)
-    .single<Profile>();
-
-  if (!profile) return null;
-
-  const { data: members } = await supabase
+  /*
+   * 只查一次。profiles 的 RLS 是「自己 or 同家庭」,所以這一次就同時拿到
+   * 自己的 profile 與成員清單 —— 不需要再單獨查一次自己那列。
+   * 還沒加入家庭的人,這裡就只會回自己一列。
+   */
+  const { data } = await supabase
     .from('profiles')
     .select('id, household_id, display_name')
     .order('created_at');
+
+  const members = (data ?? []) as Profile[];
+  const profile = members.find((m) => m.id === user.id);
+
+  // 註冊後 profile 的觸發器還沒跑完時會是這種情形
+  if (!profile) return null;
 
   return {
     userId: user.id,
     email: user.email ?? '',
     profile,
-    members: (members ?? []) as Profile[],
+    members,
   };
-}
+});
 
 /** 依視角決定要納入哪些人的資料 */
 export function ownerIdsForScope(
