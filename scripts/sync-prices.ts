@@ -13,6 +13,7 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { calculateHoldings, type StockTransaction } from '../lib/holdings.ts';
 import {
   fetchTpexCloses,
+  fetchTwSymbols,
   fetchTwseCloses,
   fetchUsClose,
   fetchUsdTwd,
@@ -168,7 +169,39 @@ async function syncPrices(): Promise<number> {
 }
 
 // ---------------------------------------------------------------------------
-// 2. 匯率
+// 2. 台股代號字典(新增交易時的自動完成用)
+// ---------------------------------------------------------------------------
+
+/** PostgREST 一次吞太大包會被擋,分批送 */
+const SYMBOL_CHUNK = 1000;
+
+async function syncSymbols(): Promise<number> {
+  const symbols = await fetchTwSymbols();
+
+  if (symbols.length === 0) {
+    console.warn('  兩個來源都沒回資料,這次跳過(保留資料庫既有的字典)');
+    return 0;
+  }
+
+  const stamp = new Date().toISOString();
+
+  for (let i = 0; i < symbols.length; i += SYMBOL_CHUNK) {
+    const chunk = symbols.slice(i, i + SYMBOL_CHUNK);
+    const { error } = await db()
+      .from('market_symbols')
+      .upsert(
+        chunk.map((s) => ({ ...s, updated_at: stamp })),
+        { onConflict: 'market,symbol' }
+      );
+    if (error) throw explainWriteError(error, '寫入代號字典');
+  }
+
+  log(`代號字典:${symbols.length} 檔台股`);
+  return symbols.length;
+}
+
+// ---------------------------------------------------------------------------
+// 3. 匯率
 // ---------------------------------------------------------------------------
 
 /** 從資料庫取回最近一次抓到的匯率,當作抓取失敗時的備援 */
@@ -209,7 +242,7 @@ async function syncFx(): Promise<number> {
 }
 
 // ---------------------------------------------------------------------------
-// 3. 重算每日總資產快照
+// 4. 重算每日總資產快照
 // ---------------------------------------------------------------------------
 
 interface SnapshotRow {
@@ -352,13 +385,24 @@ async function main() {
 
   await preflight();
 
-  log('\n[1/3] 同步股價');
+  log('\n[1/4] 同步股價');
   await syncPrices();
 
-  log('\n[2/3] 同步匯率');
+  /*
+   * 代號字典只是新增交易時的便利功能,壞掉不該讓整份同步失敗 ——
+   * 價格與快照才是這支腳本真正的職責。
+   */
+  log('\n[2/4] 同步台股代號字典');
+  try {
+    await syncSymbols();
+  } catch (err) {
+    console.warn(`  代號字典同步失敗,不影響其他資料:${(err as Error).message}`);
+  }
+
+  log('\n[3/4] 同步匯率');
   const usdToTwd = await syncFx();
 
-  log('\n[3/3] 重算總資產快照');
+  log('\n[4/4] 重算總資產快照');
   await rebuildSnapshots(usdToTwd);
 
   log('\n完成');

@@ -284,6 +284,21 @@ select distinct on (from_currency, to_currency)
 from public.fx_rates
 order by from_currency, to_currency, rate_date desc;
 
+-- ----------------------------------------------------------------------------
+-- 全市場代號字典 — 新增交易時打代號就能帶出商品名稱
+--
+-- 跟 stocks 是兩回事:stocks 只放這個家庭真的有交易過的標的(被 stock_transactions
+-- 以外鍵參照),這張則是整個市場的對照表,每日同步時整批 upsert 進來。
+-- 只新增不刪除 —— 某天來源少回幾檔時,不該把既有的字典砍掉。
+-- ----------------------------------------------------------------------------
+create table if not exists public.market_symbols (
+  symbol     text not null,
+  market     text not null check (market in ('TW', 'US')),
+  name       text not null,
+  updated_at timestamptz not null default now(),
+  primary key (market, symbol)
+);
+
 -- ============================================================================
 -- 5. 每日總資產快照(首頁趨勢線資料來源)
 -- ============================================================================
@@ -323,6 +338,7 @@ alter table public.stocks                    enable row level security;
 alter table public.stock_transactions        enable row level security;
 alter table public.stock_price_history       enable row level security;
 alter table public.fx_rates                  enable row level security;
+alter table public.market_symbols            enable row level security;
 alter table public.daily_net_worth_snapshots enable row level security;
 
 -- households ------------------------------------------------------------------
@@ -412,6 +428,12 @@ create policy prices_select on public.stock_price_history
 
 drop policy if exists fx_select on public.fx_rates;
 create policy fx_select on public.fx_rates
+  for select to authenticated using (true);
+
+-- 代號字典是公開的上市櫃資料,但只開放給已登入者查
+-- (自動完成的 API 不另外檢查身分,就靠這條政策把未登入的請求擋成空結果)
+drop policy if exists market_symbols_select on public.market_symbols;
+create policy market_symbols_select on public.market_symbols
   for select to authenticated using (true);
 
 -- daily_net_worth_snapshots ---------------------------------------------------

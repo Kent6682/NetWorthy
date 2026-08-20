@@ -463,6 +463,38 @@ select.field {
   }
 }
 
+/* 股票代號的自動完成清單 —— 蓋在輸入框正下方 */
+.suggest-list {
+  position: absolute;
+  z-index: 20;
+  left: 0;
+  right: 0;
+  top: calc(100% + 4px);
+  max-height: 216px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--baseline);
+  border-radius: var(--radius-control);
+  background: var(--surface-1);
+  box-shadow: var(--shadow-raised);
+}
+
+.suggest-item {
+  display: flex;
+  width: 100%;
+  min-height: 44px;
+  align-items: baseline;
+  gap: 10px;
+  padding: 11px 12px;
+  text-align: left;
+  font-size: 14px;
+}
+
+.suggest-item:hover,
+.suggest-item[data-active='true'] {
+  background: var(--surface-sunken);
+}
+
 .sr-only {
   position: absolute;
   width: 1px;

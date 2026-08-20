@@ -5,7 +5,12 @@
 
 import { test, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { fetchTwseCloses, fetchTpexCloses, fetchUsdTwd } from '../scripts/providers.ts';
+import {
+  fetchTwseCloses,
+  fetchTpexCloses,
+  fetchTwSymbols,
+  fetchUsdTwd,
+} from '../scripts/providers.ts';
 
 const realFetch = globalThis.fetch;
 afterEach(() => {
@@ -61,6 +66,58 @@ test('櫃買中心回應解析', async () => {
   assert.equal(map.get('6488')?.close_price, 985);
   assert.equal(map.get('5483')?.close_price, 112.5, '代號前後的空白要去掉');
   assert.equal(map.get('0000'), undefined, '空的收盤價要略過');
+});
+
+test('代號字典:上市與上櫃合併,同代號以證交所為準', async () => {
+  let call = 0;
+  globalThis.fetch = (async () => {
+    call += 1;
+    const payload =
+      call === 1
+        ? [
+            { Date: '1150818', Code: '2330', Name: '台積電', ClosingPrice: '1225.00' },
+            { Date: '1150818', Code: ' 0050 ', Name: ' 元大台灣50 ', ClosingPrice: '200' },
+            // 沒有名稱的不該進字典,否則下拉選單會出現空白列
+            { Date: '1150818', Code: '9998', Name: '', ClosingPrice: '10' },
+          ]
+        : [
+            { Date: '1150818', SecuritiesCompanyCode: '6488', CompanyName: '環球晶', Close: '985' },
+            { Date: '1150818', SecuritiesCompanyCode: '2330', CompanyName: '不該蓋掉', Close: '1' },
+          ];
+    return { ok: true, status: 200, json: async () => payload } as unknown as Response;
+  }) as typeof fetch;
+
+  const rows = await fetchTwSymbols();
+  const byCode = new Map(rows.map((r) => [r.symbol, r.name]));
+
+  assert.equal(call, 2, '上市與上櫃都要抓');
+  assert.equal(byCode.get('2330'), '台積電', '同一個代號兩邊都有時,以證交所那份為準');
+  assert.equal(byCode.get('0050'), '元大台灣50', '代號與名稱前後的空白要去掉');
+  assert.equal(byCode.get('6488'), '環球晶');
+  assert.equal(byCode.has('9998'), false, '沒有名稱的要略過');
+  assert.ok(
+    rows.every((r) => r.market === 'TW'),
+    '這兩個來源都是台股'
+  );
+});
+
+test('代號字典:一邊的來源掛掉,仍然回傳另一邊', async () => {
+  let call = 0;
+  globalThis.fetch = (async () => {
+    call += 1;
+    if (call === 1) return { ok: false, status: 503 } as unknown as Response;
+    return {
+      ok: true,
+      status: 200,
+      json: async () => [
+        { Date: '1150818', SecuritiesCompanyCode: '6488', CompanyName: '環球晶', Close: '985' },
+      ],
+    } as unknown as Response;
+  }) as typeof fetch;
+
+  const rows = await fetchTwSymbols();
+  assert.equal(rows.length, 1, '證交所掛掉時還是要有上櫃的資料');
+  assert.equal(rows[0].name, '環球晶');
 });
 
 test('匯率主來源 open.er-api 解析', async () => {

@@ -67,6 +67,9 @@ export interface PriceRow {
 // 台股 — 證交所(上市)
 // ---------------------------------------------------------------------------
 
+const TWSE_URL = 'https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL';
+const TPEX_URL = 'https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes';
+
 interface TwseRow {
   Date: string;
   Code: string;
@@ -76,9 +79,7 @@ interface TwseRow {
 
 /** 證交所每日收盤行情:一次拿回全部上市股票 */
 export async function fetchTwseCloses(): Promise<Map<string, PriceRow>> {
-  const rows = await fetchJson<TwseRow[]>(
-    'https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL'
-  );
+  const rows = await fetchJson<TwseRow[]>(TWSE_URL);
 
   const map = new Map<string, PriceRow>();
   for (const row of rows) {
@@ -97,14 +98,13 @@ export async function fetchTwseCloses(): Promise<Map<string, PriceRow>> {
 interface TpexRow {
   Date: string;
   SecuritiesCompanyCode: string;
+  CompanyName: string;
   Close: string;
 }
 
 /** 櫃買中心每日收盤行情:一次拿回全部上櫃股票 */
 export async function fetchTpexCloses(): Promise<Map<string, PriceRow>> {
-  const rows = await fetchJson<TpexRow[]>(
-    'https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes'
-  );
+  const rows = await fetchJson<TpexRow[]>(TPEX_URL);
 
   const map = new Map<string, PriceRow>();
   for (const row of rows) {
@@ -115,6 +115,54 @@ export async function fetchTpexCloses(): Promise<Map<string, PriceRow>> {
     map.set(code, { symbol: code, price_date: date, close_price: close });
   }
   return map;
+}
+
+// ---------------------------------------------------------------------------
+// 台股 — 代號字典(新增交易時的自動完成用)
+// ---------------------------------------------------------------------------
+
+export interface SymbolRow {
+  symbol: string;
+  market: 'TW' | 'US';
+  name: string;
+}
+
+/**
+ * 台股全市場的代號 → 名稱對照(上市 + 上櫃)。
+ *
+ * 用的是跟收盤價同樣的兩支端點,但刻意分開再打一次,不跟價格共用回應:
+ * 這是「打代號自動帶名稱」的便利資料,不該有任何機會拖垮價格同步。
+ * 兩邊各自 try,一邊掛掉還是回傳另一邊的結果。
+ */
+export async function fetchTwSymbols(): Promise<SymbolRow[]> {
+  const found = new Map<string, SymbolRow>();
+
+  try {
+    const rows = await fetchJson<TwseRow[]>(TWSE_URL);
+    for (const row of rows) {
+      const symbol = row.Code?.trim();
+      const name = row.Name?.trim();
+      if (symbol && name) found.set(symbol, { symbol, market: 'TW', name });
+    }
+  } catch (err) {
+    console.warn(`  證交所代號字典抓取失敗:${(err as Error).message}`);
+  }
+
+  try {
+    const rows = await fetchJson<TpexRow[]>(TPEX_URL);
+    for (const row of rows) {
+      const symbol = row.SecuritiesCompanyCode?.trim();
+      const name = row.CompanyName?.trim();
+      // 上市優先:同一個代號兩邊都有時,不覆蓋證交所那份
+      if (symbol && name && !found.has(symbol)) {
+        found.set(symbol, { symbol, market: 'TW', name });
+      }
+    }
+  } catch (err) {
+    console.warn(`  櫃買中心代號字典抓取失敗:${(err as Error).message}`);
+  }
+
+  return [...found.values()];
 }
 
 // ---------------------------------------------------------------------------
