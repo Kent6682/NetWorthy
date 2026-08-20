@@ -88,3 +88,6 @@ export const STOCK_TXN_LABEL = {
   buy: '買進',
   sell: '賣出',
 } as const;
+
+/** 登入/註冊 Server Action 的回傳型別 */
+export type AuthResult = { error?: string; notice?: string };

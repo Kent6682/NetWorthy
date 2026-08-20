@@ -2,6 +2,7 @@
   "name": "asset-tracker",
   "version": "1.0.0",
   "private": true,
+  "type": "module",
   "description": "家庭資產追蹤系統 — 股票與現金帳戶記錄、每日自動同步股價、資產配置與增長趨勢",
   "scripts": {
     "dev": "next dev",

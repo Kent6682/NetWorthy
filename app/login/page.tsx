@@ -2,11 +2,12 @@
 
 import { useActionState, useState } from 'react';
 import { signIn, signUp } from '@/app/actions/auth';
+import type { AuthResult } from '@/lib/types';
 
 export default function LoginPage() {
   const [mode, setMode] = useState<'signin' | 'signup'>('signin');
   const action = mode === 'signin' ? signIn : signUp;
-  const [state, formAction, pending] = useActionState(action, null as { error?: string } | null);
+  const [state, formAction, pending] = useActionState<AuthResult | null, FormData>(action, null);
 
   return (
     <main className="flex min-h-[100dvh] items-center justify-center px-4 py-10">
@@ -71,6 +72,15 @@ export default function LoginPage() {
             </div>
 
             {state?.error && <p className="neg text-sm leading-relaxed">{state.error}</p>}
+
+            {state?.notice && (
+              <p
+                className="rounded-lg p-3 text-sm leading-relaxed"
+                style={{ background: 'var(--positive-wash)', color: 'var(--positive)' }}
+              >
+                {state.notice}
+              </p>
+            )}
 
             <button type="submit" className="btn btn-primary w-full" disabled={pending}>
               {pending ? '處理中…' : mode === 'signin' ? '登入' : '註冊'}

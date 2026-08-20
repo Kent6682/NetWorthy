@@ -8,7 +8,8 @@
  * 這把金鑰只放在 GitHub Secrets,絕對不要進到前端。
  */
 
-import { createClient } from '@supabase/supabase-js';
+import { pathToFileURL } from 'node:url';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { calculateHoldings, type StockTransaction } from '../lib/holdings.ts';
 import {
   fetchTpexCloses,
@@ -18,17 +19,30 @@ import {
   type PriceRow,
 } from './providers.ts';
 
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+/**
+ * 延遲建立 client:模組被 import 時(例如單元測試)不該因為缺環境變數就中止行程,
+ * 真正要連資料庫時才檢查。
+ */
+let client: SupabaseClient | null = null;
 
-if (!SUPABASE_URL || !SERVICE_KEY) {
-  console.error('缺少環境變數 NEXT_PUBLIC_SUPABASE_URL 或 SUPABASE_SERVICE_ROLE_KEY');
-  process.exit(1);
+function db() {
+  if (client) return client;
+
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+  if (!url || !key) {
+    throw new Error(
+      '缺少環境變數 NEXT_PUBLIC_SUPABASE_URL 或 SUPABASE_SERVICE_ROLE_KEY。\n' +
+        '在 GitHub 上請到 repo 的 Settings → Secrets and variables → Actions 設定這兩個 Secret。'
+    );
+  }
+
+  client = createClient(url, key, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+  return client;
 }
-
-const supabase = createClient(SUPABASE_URL, SERVICE_KEY, {
-  auth: { persistSession: false, autoRefreshToken: false },
-});
 
 const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Taipei' });
 
@@ -36,12 +50,68 @@ function log(msg: string) {
   console.log(msg);
 }
 
+/**
+ * 把資料庫的寫入錯誤翻譯成看得懂的訊息。
+ *
+ * 最常見的狀況是 SUPABASE_SERVICE_ROLE_KEY 填成了 publishable / anon 金鑰 ——
+ * Postgres 只會回一句「violates row-level security policy」,完全看不出是金鑰的問題。
+ */
+export function explainWriteError(
+  error: { message: string; code?: string },
+  what: string
+): Error {
+  const isRlsBlock =
+    error.code === '42501' || /row-level security|violates row-level/i.test(error.message);
+
+  if (!isRlsBlock) return new Error(`${what}失敗:${error.message}`);
+
+  return new Error(
+    [
+      `${what}失敗:資料庫的 Row Level Security 擋下了寫入。`,
+      '',
+      '這幾乎一定是 SUPABASE_SERVICE_ROLE_KEY 這個 Secret 填錯了 ——',
+      '目前這把金鑰沒有繞過 RLS 的權限,代表它是給瀏覽器用的公開金鑰。',
+      '',
+      '修正方式:',
+      '  1. Supabase 後台 → Settings → API Keys → 「Publishable and secret API keys」分頁',
+      '  2. 複製名稱為 default 的 secret key(開頭是 sb_secret_,不是 sb_publishable_)',
+      '  3. GitHub repo → Settings → Secrets and variables → Actions',
+      '     覆蓋 SUPABASE_SERVICE_ROLE_KEY 這個 Secret',
+      '',
+      '注意:publishable 與 anon 金鑰受 RLS 限制,不能用在這支腳本 ——',
+      '它必須跨所有家庭成員讀寫資料才算得出總資產快照。',
+    ].join('\n')
+  );
+}
+
+/**
+ * 開跑前先確認金鑰真的能寫入,不要等抓完一輪報價才失敗。
+ * 用 ISO 4217 保留給測試用的貨幣代碼 XTS,不會撞到真實資料。
+ */
+async function preflight(): Promise<void> {
+  const probe = {
+    rate_date: '1970-01-01',
+    from_currency: 'XTS',
+    to_currency: 'XTS',
+    rate: 1,
+  };
+
+  const { error } = await db()
+    .from('fx_rates')
+    .upsert(probe, { onConflict: 'rate_date,from_currency,to_currency' });
+
+  if (error) throw explainWriteError(error, '金鑰權限檢查');
+
+  await db().from('fx_rates').delete().eq('from_currency', 'XTS').eq('to_currency', 'XTS');
+  log('金鑰權限檢查:通過(可繞過 RLS)');
+}
+
 // ---------------------------------------------------------------------------
 // 1. 股價
 // ---------------------------------------------------------------------------
 
 async function syncPrices(): Promise<number> {
-  const { data: stocks, error } = await supabase.from('stocks').select('symbol, market');
+  const { data: stocks, error } = await db().from('stocks').select('symbol, market');
   if (error) throw new Error(`讀取股票清單失敗:${error.message}`);
   if (!stocks || stocks.length === 0) {
     log('沒有任何股票需要同步');
@@ -85,12 +155,12 @@ async function syncPrices(): Promise<number> {
   }
 
   if (rows.length > 0) {
-    const { error: upsertError } = await supabase
+    const { error: upsertError } = await db()
       .from('stock_price_history')
       .upsert(rows.map((r) => ({ ...r, updated_at: new Date().toISOString() })), {
         onConflict: 'symbol,price_date',
       });
-    if (upsertError) throw new Error(`寫入股價失敗:${upsertError.message}`);
+    if (upsertError) throw explainWriteError(upsertError, '寫入股價');
   }
 
   log(`股價:成功寫入 ${rows.length} / ${stocks.length} 檔`);
@@ -103,7 +173,7 @@ async function syncPrices(): Promise<number> {
 
 /** 從資料庫取回最近一次抓到的匯率,當作抓取失敗時的備援 */
 async function lastKnownUsdTwd(): Promise<number | null> {
-  const { data } = await supabase
+  const { data } = await db()
     .from('latest_fx_rates')
     .select('rate, rate_date')
     .eq('from_currency', 'USD')
@@ -127,12 +197,12 @@ async function syncFx(): Promise<number> {
     throw new Error('抓不到匯率,資料庫裡也沒有歷史匯率可用 — 中止,避免寫入失真的資產快照');
   }
 
-  const { error } = await supabase
+  const { error } = await db()
     .from('fx_rates')
     .upsert({ ...fx, updated_at: new Date().toISOString() }, {
       onConflict: 'rate_date,from_currency,to_currency',
     });
-  if (error) throw new Error(`寫入匯率失敗:${error.message}`);
+  if (error) throw explainWriteError(error, '寫入匯率');
 
   log(`匯率:1 USD = ${fx.rate} TWD(${fx.rate_date})`);
   return fx.rate;
@@ -153,7 +223,7 @@ interface SnapshotRow {
 
 async function rebuildSnapshots(usdToTwd: number): Promise<number> {
   // 成員 → 家庭
-  const { data: profiles, error: profileError } = await supabase
+  const { data: profiles, error: profileError } = await db()
     .from('profiles')
     .select('id, household_id')
     .not('household_id', 'is', null);
@@ -164,12 +234,12 @@ async function rebuildSnapshots(usdToTwd: number): Promise<number> {
   }
 
   // 帳戶餘額(由流水帳累加)
-  const { data: accounts, error: acctError } = await supabase
+  const { data: accounts, error: acctError } = await db()
     .from('accounts')
     .select('id, owner_id, currency, is_archived');
   if (acctError) throw new Error(`讀取帳戶失敗:${acctError.message}`);
 
-  const { data: acctTxns, error: txnError } = await supabase
+  const { data: acctTxns, error: txnError } = await db()
     .from('account_transactions')
     .select('account_id, signed_amount')
     .lte('transaction_date', today);
@@ -192,14 +262,14 @@ async function rebuildSnapshots(usdToTwd: number): Promise<number> {
   }
 
   // 股票市值
-  const { data: stockTxns, error: stockError } = await supabase
+  const { data: stockTxns, error: stockError } = await db()
     .from('stock_transactions')
     .select('id, owner_id, symbol, type, shares, price, fee, transaction_date, created_at')
     .lte('transaction_date', today);
   if (stockError) throw new Error(`讀取股票交易失敗:${stockError.message}`);
 
-  const { data: stocks } = await supabase.from('stocks').select('symbol, currency');
-  const { data: latest } = await supabase
+  const { data: stocks } = await db().from('stocks').select('symbol, currency');
+  const { data: latest } = await db()
     .from('latest_stock_prices')
     .select('symbol, close_price');
 
@@ -258,14 +328,14 @@ async function rebuildSnapshots(usdToTwd: number): Promise<number> {
   }
 
   // 先刪掉今天的舊資料再寫入,重跑同一天不會產生重複
-  const { error: deleteError } = await supabase
+  const { error: deleteError } = await db()
     .from('daily_net_worth_snapshots')
     .delete()
     .eq('snapshot_date', today);
-  if (deleteError) throw new Error(`清除今日快照失敗:${deleteError.message}`);
+  if (deleteError) throw explainWriteError(deleteError, '清除今日快照');
 
-  const { error: insertError } = await supabase.from('daily_net_worth_snapshots').insert(rows);
-  if (insertError) throw new Error(`寫入快照失敗:${insertError.message}`);
+  const { error: insertError } = await db().from('daily_net_worth_snapshots').insert(rows);
+  if (insertError) throw explainWriteError(insertError, '寫入快照');
 
   log(`快照:寫入 ${rows.length} 列(${profiles.length} 位成員 + ${householdTotals.size} 個家庭合計)`);
   return rows.length;
@@ -280,6 +350,8 @@ function round2(v: number): number {
 async function main() {
   log(`=== 每日同步 ${today}(台北時間)===`);
 
+  await preflight();
+
   log('\n[1/3] 同步股價');
   await syncPrices();
 
@@ -292,7 +364,10 @@ async function main() {
   log('\n完成');
 }
 
-main().catch((err) => {
-  console.error('\n同步失敗:', err instanceof Error ? err.message : err);
-  process.exit(1);
-});
+// 只有直接執行這支腳本時才跑,被測試 import 時不會有副作用
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((err) => {
+    console.error('\n同步失敗:', err instanceof Error ? err.message : err);
+    process.exit(1);
+  });
+}

@@ -2,11 +2,12 @@
 
 import { useActionState, useState } from 'react';
 import { createHousehold, joinHousehold } from '@/app/actions/auth';
+import type { AuthResult } from '@/lib/types';
 
 export default function OnboardingPage() {
   const [mode, setMode] = useState<'create' | 'join'>('create');
   const action = mode === 'create' ? createHousehold : joinHousehold;
-  const [state, formAction, pending] = useActionState(action, null as { error?: string } | null);
+  const [state, formAction, pending] = useActionState<AuthResult | null, FormData>(action, null);
 
   return (
     <main className="flex min-h-[100dvh] items-center justify-center px-4 py-10">
