@@ -1,0 +1,580 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================================================
+   設計系統
+   ----------------------------------------------------------------------------
+   視覺方向參照 Mercury / Kubera 一類的財務工具:克制的排版、充足留白、
+   細線分隔,顏色只用來表達狀態(漲跌)與圖表識別,不做裝飾。
+
+   分類色盤(8 色固定順序,不可循環使用)已通過色盲安全性驗證:
+     淺色模式 worst adjacent CVD ΔE 9.1、normal-vision ΔE 19.6
+     深色模式 worst adjacent CVD ΔE 8.4、normal-vision ΔE 19.3
+   淺色模式下 aqua / yellow / magenta 對比低於 3:1,因此圓餅圖一律附數值清單。
+   ============================================================================ */
+
+:root {
+  color-scheme: light;
+
+  /* 表面 ---------------------------------------------------------------- */
+  --surface-1: #ffffff;
+  --page-plane: #f7f7f5;
+  --surface-sunken: #f2f2ef;
+
+  /* 文字 ---------------------------------------------------------------- */
+  --text-primary: #0b0b0b;
+  --text-secondary: #55544f;
+  --text-muted: #8a8880;
+
+  /* 線條 ---------------------------------------------------------------- */
+  --gridline: #eceae4;
+  --baseline: #d8d6ce;
+  --hairline-ring: rgba(11, 11, 11, 0.08);
+  --divider: rgba(11, 11, 11, 0.06);
+
+  /* 狀態(唯一被允許帶語意的顏色)-------------------------------------- */
+  --positive: #096b2e;
+  --negative: #b3261e;
+  --positive-wash: rgba(9, 107, 46, 0.08);
+  --negative-wash: rgba(179, 38, 30, 0.08);
+
+  /* 圖表分類色 ---------------------------------------------------------- */
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+  --series-5: #e87ba4;
+  --series-6: #008300;
+  --series-7: #4a3aa7;
+  --series-8: #e34948;
+
+  /* 尺度 ---------------------------------------------------------------- */
+  --radius-card: 10px;
+  --radius-control: 8px;
+  --shadow-card: 0 1px 2px rgba(11, 11, 11, 0.04);
+  --shadow-raised: 0 4px 16px rgba(11, 11, 11, 0.08);
+  --nav-height: 56px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme='light'])) {
+    color-scheme: dark;
+
+    --surface-1: #1a1a19;
+    --page-plane: #0d0d0d;
+    --surface-sunken: #232322;
+
+    --text-primary: #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted: #8a8880;
+
+    --gridline: #2c2c2a;
+    --baseline: #3a3a37;
+    --hairline-ring: rgba(255, 255, 255, 0.1);
+    --divider: rgba(255, 255, 255, 0.07);
+
+    --positive: #3fbf68;
+    --negative: #f0645c;
+    --positive-wash: rgba(63, 191, 104, 0.12);
+    --negative-wash: rgba(240, 100, 92, 0.12);
+
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --series-3: #199e70;
+    --series-4: #c98500;
+    --series-5: #d55181;
+    --series-6: #008300;
+    --series-7: #9085e9;
+    --series-8: #e66767;
+
+    --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-raised: 0 4px 20px rgba(0, 0, 0, 0.5);
+  }
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --surface-1: #1a1a19;
+  --page-plane: #0d0d0d;
+  --surface-sunken: #232322;
+
+  --text-primary: #ffffff;
+  --text-secondary: #c3c2b7;
+  --text-muted: #8a8880;
+
+  --gridline: #2c2c2a;
+  --baseline: #3a3a37;
+  --hairline-ring: rgba(255, 255, 255, 0.1);
+  --divider: rgba(255, 255, 255, 0.07);
+
+  --positive: #3fbf68;
+  --negative: #f0645c;
+  --positive-wash: rgba(63, 191, 104, 0.12);
+  --negative-wash: rgba(240, 100, 92, 0.12);
+
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-4: #c98500;
+  --series-5: #d55181;
+  --series-6: #008300;
+  --series-7: #9085e9;
+  --series-8: #e66767;
+
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-raised: 0 4px 20px rgba(0, 0, 0, 0.5);
+}
+
+/* ============================================================================
+   基礎
+   ============================================================================ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  /* 手機橫向捲動一律禁止,任何溢出都算是版面錯誤 */
+  overflow-x: hidden;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--page-plane);
+  color: var(--text-primary);
+  font-family: system-ui, -apple-system, 'Segoe UI', 'Noto Sans TC', 'PingFang TC',
+    'Microsoft JhengHei', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  letter-spacing: -0.006em;
+}
+
+/* 手機底部分頁列會蓋住內容,預留空間 */
+.app-scroll {
+  padding-bottom: calc(var(--nav-height) + env(safe-area-inset-bottom) + 16px);
+}
+
+@media (min-width: 768px) {
+  .app-scroll {
+    padding-bottom: 40px;
+  }
+}
+
+/* ============================================================================
+   排版
+   ============================================================================ */
+
+/* 首頁主數字 — 比例數字,不用等寬數字(等寬在大字級會顯得鬆散) */
+.hero-figure {
+  font-size: clamp(2rem, 9vw, 3rem);
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  line-height: 1.05;
+  font-variant-numeric: proportional-nums;
+}
+
+/* 次級大數字(帳戶餘額頁) */
+.figure-lg {
+  font-size: clamp(1.5rem, 6vw, 2rem);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+/* 欄位對齊用的等寬數字 — 只用在會垂直對齊的地方 */
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+.eyebrow {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  letter-spacing: 0.01em;
+}
+
+.section-title {
+  font-size: 0.875rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+/* ============================================================================
+   容器與卡片
+   ============================================================================ */
+
+.container-app {
+  width: 100%;
+  max-width: 1120px;
+  margin: 0 auto;
+  padding-left: 16px;
+  padding-right: 16px;
+}
+
+@media (min-width: 768px) {
+  .container-app {
+    padding-left: 24px;
+    padding-right: 24px;
+  }
+}
+
+.card {
+  background: var(--surface-1);
+  border: 1px solid var(--hairline-ring);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+}
+
+/* 手機上卡片貼齊邊緣、只留上下框線,少掉左右兩條線畫面更乾淨 */
+.card-flush {
+  background: var(--surface-1);
+  border-top: 1px solid var(--hairline-ring);
+  border-bottom: 1px solid var(--hairline-ring);
+  margin-left: -16px;
+  margin-right: -16px;
+}
+
+@media (min-width: 640px) {
+  .card-flush {
+    margin-left: 0;
+    margin-right: 0;
+    border: 1px solid var(--hairline-ring);
+    border-radius: var(--radius-card);
+    box-shadow: var(--shadow-card);
+  }
+}
+
+.card-pad {
+  padding: 16px;
+}
+
+@media (min-width: 640px) {
+  .card-pad {
+    padding: 20px;
+  }
+}
+
+/* 列與列之間的細線 */
+.divide-hairline > * + * {
+  border-top: 1px solid var(--divider);
+}
+
+/* ============================================================================
+   表單 — 觸控尺寸至少 44px,字級 16px 以免 iOS 自動放大畫面
+   ============================================================================ */
+
+.field {
+  width: 100%;
+  min-height: 44px;
+  background: var(--surface-1);
+  border: 1px solid var(--baseline);
+  border-radius: var(--radius-control);
+  padding: 10px 12px;
+  font-size: 16px;
+  color: var(--text-primary);
+  transition: border-color 0.15s;
+}
+
+@media (min-width: 640px) {
+  .field {
+    min-height: 40px;
+    font-size: 14px;
+  }
+}
+
+.field:focus {
+  outline: none;
+  border-color: var(--series-1);
+  box-shadow: 0 0 0 3px rgba(42, 120, 214, 0.15);
+}
+
+select.field {
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5L6 6.5L11 1.5' stroke='%238a8880' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  padding-right: 32px;
+}
+
+.label {
+  display: block;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 44px;
+  border-radius: var(--radius-control);
+  padding: 0 16px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  white-space: nowrap;
+  transition: opacity 0.15s, background 0.15s;
+  cursor: pointer;
+}
+
+@media (min-width: 640px) {
+  .btn {
+    min-height: 38px;
+  }
+}
+
+.btn:hover:not(:disabled) {
+  opacity: 0.88;
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  background: var(--text-primary);
+  color: var(--surface-1);
+  border: 1px solid var(--text-primary);
+}
+
+.btn-secondary {
+  background: var(--surface-1);
+  border: 1px solid var(--baseline);
+  color: var(--text-primary);
+}
+
+.btn-ghost {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-secondary);
+  min-height: 36px;
+  padding: 0 10px;
+}
+
+.btn-ghost:hover {
+  background: var(--surface-sunken);
+}
+
+/* ============================================================================
+   狀態
+   ============================================================================ */
+
+.pos {
+  color: var(--positive);
+}
+
+.neg {
+  color: var(--negative);
+}
+
+/* 漲跌標籤 */
+.delta-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.delta-chip.pos {
+  background: var(--positive-wash);
+}
+
+.delta-chip.neg {
+  background: var(--negative-wash);
+}
+
+/* ============================================================================
+   分頁列
+   ============================================================================ */
+
+.tabbar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 40;
+  display: flex;
+  background: var(--surface-1);
+  border-top: 1px solid var(--hairline-ring);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+@media (min-width: 768px) {
+  .tabbar {
+    display: none;
+  }
+}
+
+.tabbar-item {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  height: var(--nav-height);
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+  transition: color 0.15s;
+}
+
+.tabbar-item[data-active='true'] {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+/* ============================================================================
+   雜項
+   ============================================================================ */
+
+/* 重新載入時維持前一份畫面,不要閃骨架 */
+.is-refetching {
+  opacity: 0.6;
+  transition: opacity 0.2s;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
+/* ============================================================================
+   表單面板 — 手機從底部滑上,桌機置中對話框
+   ============================================================================ */
+
+@keyframes sheet-up {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.sheet-root {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+
+.sheet-scrim {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  animation: fade-in 0.15s ease-out;
+}
+
+.sheet-panel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-height: 92vh;
+  max-height: 92dvh;
+  background: var(--surface-1);
+  border-radius: 16px 16px 0 0;
+  box-shadow: var(--shadow-raised);
+  outline: none;
+  animation: sheet-up 0.22s cubic-bezier(0.32, 0.72, 0, 1);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.sheet-header {
+  position: relative;
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--divider);
+}
+
+.sheet-grabber {
+  position: absolute;
+  left: 50%;
+  top: 7px;
+  transform: translateX(-50%);
+  width: 36px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--baseline);
+}
+
+.sheet-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 16px;
+}
+
+.sheet-footer {
+  flex-shrink: 0;
+  padding: 12px 16px;
+  border-top: 1px solid var(--divider);
+}
+
+@media (min-width: 640px) {
+  .sheet-root {
+    align-items: center;
+  }
+
+  .sheet-panel {
+    max-width: 34rem;
+    max-height: 86vh;
+    border-radius: 14px;
+    animation: fade-in 0.15s ease-out;
+  }
+
+  .sheet-grabber {
+    display: none;
+  }
+
+  .sheet-header,
+  .sheet-body {
+    padding-left: 20px;
+    padding-right: 20px;
+  }
+
+  .sheet-footer {
+    padding-left: 20px;
+    padding-right: 20px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

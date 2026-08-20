@@ -1,0 +1,37 @@
+name: 每日同步股價與資產快照
+
+on:
+  schedule:
+    # UTC 06:30 = 台灣時間 14:30(台股 13:30 收盤後一小時)
+    - cron: '30 6 * * 1-5'
+    # UTC 22:30 = 台灣隔天早上 06:30(美股收盤後),補抓美股與匯率
+    - cron: '30 22 * * 1-5'
+  # 也可以到 Actions 分頁手動觸發
+  workflow_dispatch:
+
+# 同一時間只跑一份,避免兩個排程撞在一起重複寫入
+concurrency:
+  group: sync-prices
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: 安裝相依套件
+        run: npm ci
+
+      - name: 執行同步
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: npm run sync
