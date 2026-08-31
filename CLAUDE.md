@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 npm install
 npm run dev      # http://localhost:3000
 npm run build
-npm test         # node --test,23 個測試,不需 node_modules、不連網
+npm test         # node --test,38 個測試,不連網(但要先 npm install)
 npm run sync     # 手動跑一次每日同步(需 SUPABASE_SERVICE_ROLE_KEY)
 ```
 
@@ -23,7 +23,9 @@ node --test --experimental-strip-types --test-name-pattern="零股" tests/holdin
 
 `npm run lint` 在 package.json 裡,但專案沒有 eslint 設定檔也沒裝 eslint,實際上跑不起來 —— 型別檢查請用 `npm run build`(`tsc --noEmit` 也可以)。
 
-資料庫沒有 migration 工具:`supabase/schema.sql` 是完整且可重複執行的單一份 SQL,改完整份貼進 Supabase SQL Editor 執行。`supabase/test_schema.sql` 驗證觸發器、餘額計算、約束與 RLS,需要本機 PostgreSQL。
+資料庫沒有 migration 工具:`supabase/schema.sql` 是完整且可重複執行的單一份 SQL,改完整份貼進 Supabase SQL Editor 執行(或用 Supabase MCP 的 `apply_migration` 送同一份內容)。`supabase/test_schema.sql` 驗證觸發器、餘額計算、約束與 RLS,需要本機 PostgreSQL。
+
+**這個 repo 不能放在 Google Drive 同步的資料夾裡跑** —— npm 解壓大量小檔會跟 Drive 打架,`npm ci` 穩定噴 `EBADF: bad file descriptor`。本機路徑是 `D:\MyData\projects\NetWorthy`。
 
 ## 兩種執行環境共用同一份 lib
 
