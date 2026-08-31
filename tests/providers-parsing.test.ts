@@ -101,6 +101,39 @@ test('代號字典:上市與上櫃合併,同代號以證交所為準', async () 
   );
 });
 
+test('代號字典:濾掉權證,但不能誤傷長得像的正常標的', async () => {
+  let call = 0;
+  globalThis.fetch = (async () => {
+    call += 1;
+    const payload =
+      call === 1
+        ? [
+            { Date: '1150818', Code: '2330', Name: '台積電', ClosingPrice: '1225' },
+            // 權證:七開頭六碼,要被濾掉
+            { Date: '1150818', Code: '705595', Name: '閎康元大59購01', ClosingPrice: '1.2' },
+            { Date: '1150818', Code: '704946', Name: '閎康統一72購01', ClosingPrice: '0.8' },
+            // 七開頭但只有四碼 —— 這是正常股票,要留著
+            { Date: '1150818', Code: '7402', Name: 'LINEPAY', ClosingPrice: '520' },
+            // 零開頭與九開頭的六碼是 ETF 與 DR,也要留著
+            { Date: '1150818', Code: '006201', Name: '元大富櫃50', ClosingPrice: '43.12' },
+            { Date: '1150818', Code: '00686R', Name: '群益臺灣加權反1', ClosingPrice: '8.4' },
+            { Date: '1150818', Code: '910861', Name: '神州-DR', ClosingPrice: '2.1' },
+            // 名字裡有「購」「售」的正常股票,不可以因為名稱被誤刪
+            { Date: '1150818', Code: '2945', Name: '三商家購', ClosingPrice: '18' },
+          ]
+        : [{ Date: '1150818', SecuritiesCompanyCode: '712345', CompanyName: '某上櫃權證購01', Close: '1' }];
+    return { ok: true, status: 200, json: async () => payload } as unknown as Response;
+  }) as typeof fetch;
+
+  const codes = (await fetchTwSymbols()).map((r) => r.symbol).sort();
+
+  assert.deepEqual(
+    codes,
+    ['006201', '00686R', '2330', '2945', '7402', '910861'],
+    '只有七開頭的六碼數字該被濾掉'
+  );
+});
+
 test('代號字典:一邊的來源掛掉,仍然回傳另一邊', async () => {
   let call = 0;
   globalThis.fetch = (async () => {

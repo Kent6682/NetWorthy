@@ -128,6 +128,22 @@ export interface SymbolRow {
 }
 
 /**
+ * 認購/認售權證,不收進字典。
+ *
+ * 證交所與櫃買的每日行情把權證也一起回了,數量是一般股票的五倍
+ * (9,927 vs 1,984),留著會把自動完成的下拉選單洗版 —— 打「閎康」時,
+ * 真正的 3587 後面會跟著七檔它的權證,八格就滿了。
+ *
+ * 只認代號形狀(七開頭的六碼數字,例如 705595 閎康元大59購01),不看名稱:
+ *   - 2945 三商家購、3085 新零售 這種正常股票的名字裡就有「購」「售」
+ *   - 七開頭但四碼的是正常股票(7402 LINEPAY、7769 鴻勁)
+ *   - 零開頭與九開頭的六碼是 ETF 與 DR(006201、00686R、9110 神州-DR)
+ */
+function isWarrant(symbol: string): boolean {
+  return /^7\d{5}$/.test(symbol);
+}
+
+/**
  * 台股全市場的代號 → 名稱對照(上市 + 上櫃)。
  *
  * 用的是跟收盤價同樣的兩支端點,但刻意分開再打一次,不跟價格共用回應:
@@ -142,7 +158,9 @@ export async function fetchTwSymbols(): Promise<SymbolRow[]> {
     for (const row of rows) {
       const symbol = row.Code?.trim();
       const name = row.Name?.trim();
-      if (symbol && name) found.set(symbol, { symbol, market: 'TW', name });
+      if (symbol && name && !isWarrant(symbol)) {
+        found.set(symbol, { symbol, market: 'TW', name });
+      }
     }
   } catch (err) {
     console.warn(`  證交所代號字典抓取失敗:${(err as Error).message}`);
@@ -154,7 +172,7 @@ export async function fetchTwSymbols(): Promise<SymbolRow[]> {
       const symbol = row.SecuritiesCompanyCode?.trim();
       const name = row.CompanyName?.trim();
       // 上市優先:同一個代號兩邊都有時,不覆蓋證交所那份
-      if (symbol && name && !found.has(symbol)) {
+      if (symbol && name && !isWarrant(symbol) && !found.has(symbol)) {
         found.set(symbol, { symbol, market: 'TW', name });
       }
     }
