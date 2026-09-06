@@ -47,6 +47,8 @@ node --test --experimental-strip-types --test-name-pattern="零股" tests/holdin
 2. **券商現金 = 觸發器算的。** `sync_broker_cash()` 掛在 `stock_transactions` 的 insert/update/delete 上,買進產生 `withdraw`、賣出產生 `deposit`,`initial`(期初持股)不連動。這些列帶有 `stock_transaction_id`,**永遠不要手動新增或修改** —— 觸發器每次都會先把舊的刪掉重建。
 3. **持股均價 = `lib/holdings.ts` 算的。** 移動加權平均法,網站與同步腳本共用這一份。排序規則(交易日 → 同日 initial 優先 → created_at → id)關係到結果可重現,改動前先看 `tests/holdings.test.ts` 的 14 個案例。
 
+4. **每日盈虧 = `lib/pnl.ts` 算的。** 公式是「股票市值變化 − 當日買進金額 + 當日賣出金額 − 手續費與稅」。**基準刻意是股票市值而不是總資產** —— 用總資產的話,沒勾選「同步更新券商帳戶餘額」的買賣會憑空生出資產(股票增加、現金卻沒減少)。導入既有持股(`initial`)那天不計盈虧,那天既沒賺也沒賠。現金完全不參與。
+
 `stocks` 與 `market_symbols` 是兩回事,不要混用:`stocks` 只放這個家庭真的交易過的標的(被 `stock_transactions` 以外鍵參照),`market_symbols` 是每日同步整批 upsert 進來的**全市場代號字典**,只服務「新增交易時打代號自動帶出商品名稱」這件事,而且只新增不刪除。
 
 `daily_net_worth_snapshots` 是同步腳本每天整批重算的衍生資料:先刪掉那些日期的列再重寫,所以重跑不會重複。每位成員一列,另外每個家庭多一列 ``owner_id` IS NULL` 的合計 —— 首頁「全家」視角讀的就是那一列。

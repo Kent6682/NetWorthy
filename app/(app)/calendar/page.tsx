@@ -5,6 +5,7 @@ import { todayInTaipei } from '@/lib/format';
 import {
   computeDailyPnl,
   daysInMonth,
+  groupTradesByDate,
   monthGrid,
   monthTotal,
   parseMonth,
@@ -12,9 +13,9 @@ import {
   type DailyPnl,
 } from '@/lib/pnl';
 import {
-  getExternalFlows,
   getSession,
   getSnapshotRange,
+  getStockTradesInRange,
   ownerIdsForScope,
   parseScope,
 } from '@/lib/queries';
@@ -40,17 +41,18 @@ export default async function CalendarPage({
   const first = days[0];
   const last = days[days.length - 1];
 
-  const [snapshots, flows] = await Promise.all([
+  const [snapshots, trades] = await Promise.all([
     // 多要前一天,才算得出當月第一天的盈虧
     getSnapshotRange(scope, session.userId, previousDay(first), last),
-    getExternalFlows(ownerIds, first, last),
+    getStockTradesInRange(ownerIds, first, last),
   ]);
 
-  const totalsByDate = new Map(
-    snapshots.map((s) => [s.snapshot_date, Number(s.total_twd)])
+  // 盈虧看的是股票市值,不是總資產 —— 詳見 lib/pnl.ts 的說明
+  const stockByDate = new Map(
+    snapshots.map((s) => [s.snapshot_date, Number(s.stock_twd)])
   );
 
-  const rows = computeDailyPnl(totalsByDate, flows, days);
+  const rows = computeDailyPnl(stockByDate, groupTradesByDate(trades), days);
   const byDate = new Map<string, DailyPnl>(rows.map((r) => [r.date, r]));
 
   return (
@@ -58,7 +60,7 @@ export default async function CalendarPage({
       <div className="mb-4">
         <h1 className="text-lg font-semibold tracking-tight">每日盈虧</h1>
         <p className="mt-0.5 text-sm" style={{ color: 'var(--text-secondary)' }}>
-          扣掉資金進出後的純市值變化
+          扣掉買賣後的純市值變化
         </p>
       </div>
 

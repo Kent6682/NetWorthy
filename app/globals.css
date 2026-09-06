@@ -478,6 +478,49 @@ select.field {
 }
 
 /*
+ * 交易標記 —— 買、賣、導入三種形狀。
+ * 刻意用中性的藍色而不是紅綠:它表示「這天做了什麼」,跟賺賠是兩回事,
+ * 用漲跌色會讓兩種資訊混在一起。
+ */
+.cal-marks {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: flex;
+  gap: 2px;
+}
+
+.cal-mark {
+  width: 5px;
+  height: 5px;
+  box-sizing: border-box;
+}
+
+/* 買進:實心點 */
+.cal-mark[data-kind='buy'] {
+  border-radius: 50%;
+  background: var(--series-1);
+}
+
+/* 賣出:空心圈 */
+.cal-mark[data-kind='sell'] {
+  border-radius: 50%;
+  border: 1.5px solid var(--series-1);
+}
+
+/* 導入:方塊 */
+.cal-mark[data-kind='initial'] {
+  background: var(--text-muted);
+}
+
+/* 導入日沒有盈虧可算,用一個淡淡的字標示,不要讓格子看起來像沒資料 */
+.cal-imported {
+  font-size: 0.625rem;
+  color: var(--text-muted);
+  line-height: 1;
+}
+
+/*
  * 幅度用底色深淺表示,強度由 --cal-intensity 帶進來(0～1)。
  * 顏色本身仍然只有紅綠兩種 —— 深淺是輔助,不是另一個維度。
  */

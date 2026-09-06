@@ -13,6 +13,28 @@ import { shiftMonth, type DailyPnl } from '@/lib/pnl';
 
 const WEEKDAYS = ['日', '一', '二', '三', '四', '五', '六'];
 
+/** 滑鼠停留時的完整說明 —— 格子太小,細節放這裡 */
+function describeDay(date: string, row: DailyPnl | undefined): string {
+  const parts: string[] = [date];
+
+  if (row?.trades && row.trades.initial > 0) {
+    parts.push(`導入 ${row.trades.initial} 檔既有持股(當天不計盈虧)`);
+  } else if (row?.pnl === null || row?.pnl === undefined) {
+    parts.push('沒有資料可比');
+  } else {
+    const percent =
+      row.percent === null ? '' : `(${formatPercent(row.percent)})`;
+    parts.push(`${formatMoney(row.pnl)}${percent}`);
+  }
+
+  const actions: string[] = [];
+  if (row?.trades?.buy) actions.push(`買進 ${row.trades.buy} 筆`);
+  if (row?.trades?.sell) actions.push(`賣出 ${row.trades.sell} 筆`);
+  if (actions.length > 0) parts.push(actions.join('、'));
+
+  return parts.join(' · ');
+}
+
 function Arrow({ dir }: { dir: 'prev' | 'next' }) {
   return (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
@@ -86,6 +108,8 @@ export default function PnlCalendar({
 
           const row = byDate.get(date);
           const pnl = row?.pnl ?? null;
+          const trades = row?.trades ?? null;
+          const imported = (trades?.initial ?? 0) > 0;
           const tone = pnl === null ? undefined : pnl >= 0 ? 'gain' : 'loss';
           const intensity = pnl === null ? 0 : Math.abs(pnl) / maxAbs;
 
@@ -96,34 +120,60 @@ export default function PnlCalendar({
               data-today={date === today}
               data-tone={tone}
               style={{ '--cal-intensity': intensity } as React.CSSProperties}
-              title={
-                pnl === null
-                  ? `${date} 沒有資料`
-                  : `${date} ${formatMoney(pnl)}${row?.percent !== null && row?.percent !== undefined ? `(${formatPercent(row.percent)})` : ''}`
-              }
+              title={describeDay(date, row)}
             >
+              {trades && (
+                <span className="cal-marks">
+                  {trades.initial > 0 && <span className="cal-mark" data-kind="initial" />}
+                  {trades.buy > 0 && <span className="cal-mark" data-kind="buy" />}
+                  {trades.sell > 0 && <span className="cal-mark" data-kind="sell" />}
+                </span>
+              )}
+
               <span className="cal-date">{Number(date.slice(-2))}</span>
 
-              {pnl !== null && (
-                <>
-                  <span className={`cal-amount ${pnl >= 0 ? 'pos' : 'neg'}`}>
-                    {formatSignedCompact(pnl)}
-                  </span>
-                  {row?.percent !== null && row?.percent !== undefined && (
-                    <span className="cal-percent hidden sm:block">
-                      {formatPercent(row.percent)}
+              {imported ? (
+                <span className="cal-imported">導入</span>
+              ) : (
+                pnl !== null && (
+                  <>
+                    <span className={`cal-amount ${pnl >= 0 ? 'pos' : 'neg'}`}>
+                      {formatSignedCompact(pnl)}
                     </span>
-                  )}
-                </>
+                    {row?.percent !== null && row?.percent !== undefined && (
+                      <span className="cal-percent hidden sm:block">
+                        {formatPercent(row.percent)}
+                      </span>
+                    )}
+                  </>
+                )
               )}
             </div>
           );
         })}
       </div>
 
-      <p className="mt-3 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-        空白的日子代表沒有資料可比 —— 週末與假日沒有交易,或那天還在你的第一筆持有起始日之前。
-        存款、提款、帳戶間轉帳與買賣股票的交割都已經從盈虧中扣除,顯示的是純粹的市值變化。
+      <div
+        className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs"
+        style={{ color: 'var(--text-muted)' }}
+      >
+        <span className="flex items-center gap-1.5">
+          <span className="cal-mark" data-kind="buy" />買進
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="cal-mark" data-kind="sell" />賣出
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="cal-mark" data-kind="initial" />導入既有持股
+        </span>
+      </div>
+
+      <p className="mt-2.5 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+        顯示的是<strong style={{ color: 'var(--text-secondary)' }}>股票市值</strong>的變化,
+        已經扣掉當天買賣造成的部位變動 ——
+        買進 50 萬不是賺 50 萬,那只是現金換成股票;手續費與稅則算成當天的損失。
+        導入既有持股的那天不計盈虧,因為那天你既沒賺也沒賠。
+        空白的日子是沒有資料可比 —— 週末假日沒有交易,或還在第一筆持有起始日之前。
       </p>
     </section>
   );

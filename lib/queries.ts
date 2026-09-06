@@ -1,6 +1,7 @@
 import { cache } from 'react';
 import { createClient } from './supabase/server.ts';
 import type { StockTransaction } from './holdings.ts';
+import type { TradeRow } from './pnl.ts';
 import type { AccountBalance, LatestPrice, NetWorthSnapshot, Profile, Stock } from './types.ts';
 
 export type Scope = 'me' | 'family';
@@ -132,35 +133,34 @@ export async function getSnapshotRange(
 }
 
 /**
- * 日曆用:每天的淨外部資金流入,用來從盈虧裡扣掉。
+ * 日曆用:指定區間內的股票交易。
  *
- * 只算 deposit 與 withdraw,而且只算不是股票交易連動產生的那些:
- *   - 轉出 / 轉入  帳戶間搬錢,成對記錄本來就互相抵銷
- *   - 股票交割    現金變股票,總資產不變(這些列的 stock_transaction_id 不是 null)
- *   - 對帳調整    帳務更正,錢一直都在只是漏記。算成盈虧會產生假的尖峰
+ * 拿來做兩件事 —— 在格子上標記那天做了什麼,以及把買賣造成的部位變動從
+ * 市值變化裡扣掉(買進 50 萬不是賺 50 萬)。詳見 lib/pnl.ts 的公式說明。
  */
-export async function getExternalFlows(
+export async function getStockTradesInRange(
   ownerIds: string[],
   from: string,
   to: string
-): Promise<Map<string, number>> {
+): Promise<TradeRow[]> {
   const supabase = await createClient();
 
   const { data } = await supabase
-    .from('account_transactions')
-    .select('transaction_date, signed_amount, accounts!inner(owner_id)')
-    .in('accounts.owner_id', ownerIds)
-    .in('type', ['deposit', 'withdraw'])
-    .is('stock_transaction_id', null)
+    .from('stock_transactions')
+    .select('type, symbol, shares, price, fee, transaction_date')
+    .in('owner_id', ownerIds)
     .gte('transaction_date', from)
-    .lte('transaction_date', to);
+    .lte('transaction_date', to)
+    .order('transaction_date');
 
-  const flows = new Map<string, number>();
-  for (const row of data ?? []) {
-    const date = row.transaction_date as string;
-    flows.set(date, (flows.get(date) ?? 0) + Number(row.signed_amount));
-  }
-  return flows;
+  return (data ?? []).map((t) => ({
+    type: t.type,
+    symbol: t.symbol,
+    shares: Number(t.shares),
+    price: Number(t.price),
+    fee: Number(t.fee),
+    transaction_date: t.transaction_date,
+  })) as TradeRow[];
 }
 
 /** 首頁趨勢線資料:個人視角取自己那列,全家視角取 owner_id 為 null 的合計列 */

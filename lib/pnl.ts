@@ -1,20 +1,52 @@
 /**
  * 每日盈虧 —— 純函式,不碰資料庫。
  *
- * 核心公式:
- *   當日盈虧 = 今日總資產 − 昨日總資產 − 今日外部資金流入
+ * 公式:
+ *   當日盈虧 = 股票市值變化 − 當日買進金額 + 當日賣出金額 − 當日手續費與稅
  *
- * 那個減項是重點。不扣掉的話,你存 10 萬進銀行,日曆會顯示「今天賺 10 萬」。
- * 哪些算外部流入由 lib/queries.ts 的查詢決定(存入與提出算,帳戶間轉帳、
- * 股票交割、對帳調整都不算 —— 詳見那裡的註解)。
+ * 兩個重點:
+ *
+ * 1. **基準是股票市值,不是總資產。** 用總資產的話,沒有勾選「同步更新券商
+ *    帳戶餘額」的買賣會憑空生出資產 —— 股票增加了,現金卻沒減少。
+ *
+ * 2. **交易造成的部位變動要扣掉。** 買進 50 萬不是賺 50 萬,那只是現金換成
+ *    股票。扣掉之後剩下的才是市場給你的漲跌,而手續費與稅則是真的成本。
+ *
+ * 期初持股當天不算盈虧 —— 那天你既沒賺也沒賠,只是把本來就有的部位輸入進來。
+ *
+ * 現金完全不參與。銀行利息不會顯示成盈虧,對帳調整也一樣(那是帳務更正,
+ * 錢一直都在,算進去只會產生假的尖峰)。
  */
+
+export interface DayTrades {
+  /** 當天導入了幾檔期初持股 */
+  initial: number;
+  buy: number;
+  sell: number;
+  /**
+   * 部位變動造成的金額,要從市值變化裡扣掉。
+   * 買進記 +(股數×價格＋手續費),賣出記 −(股數×價格−手續費與稅)。
+   */
+  adjustment: number;
+}
 
 export interface DailyPnl {
   date: string;
-  /** null 代表這天算不出來:沒有快照,或沒有前一天可以比 */
+  /** null 代表這天算不出來:沒有資料、沒有前一天可比,或那天是導入日 */
   pnl: number | null;
   percent: number | null;
-  total: number | null;
+  stock: number | null;
+  trades: DayTrades | null;
+}
+
+/** 算盈虧與做標記時要看的交易欄位 */
+export interface TradeRow {
+  type: 'initial' | 'buy' | 'sell';
+  symbol: string;
+  shares: number;
+  price: number;
+  fee: number;
+  transaction_date: string;
 }
 
 /** YYYY-MM-DD 的前一天 */
@@ -24,32 +56,74 @@ export function previousDay(date: string): string {
   return d.toISOString().slice(0, 10);
 }
 
+/** 把交易依日期分組,並算出當天的部位變動金額 */
+export function groupTradesByDate(rows: TradeRow[]): Map<string, DayTrades> {
+  const byDate = new Map<string, DayTrades>();
+
+  for (const r of rows) {
+    const day = byDate.get(r.transaction_date) ?? {
+      initial: 0,
+      buy: 0,
+      sell: 0,
+      adjustment: 0,
+    };
+
+    const gross = r.shares * r.price;
+
+    if (r.type === 'initial') {
+      day.initial += 1;
+      // 導入日整天不算盈虧,不需要 adjustment
+    } else if (r.type === 'buy') {
+      day.buy += 1;
+      day.adjustment += gross + r.fee;
+    } else {
+      day.sell += 1;
+      day.adjustment -= gross - r.fee;
+    }
+
+    byDate.set(r.transaction_date, day);
+  }
+
+  return byDate;
+}
+
 /**
  * 算出每一天的盈虧。
  *
- * `totalsByDate` 必須包含 `days` 第一天的**前一天**,否則那天算不出來。
+ * `stockByDate` 必須包含 `days` 第一天的**前一天**,否則那天算不出來。
  */
 export function computeDailyPnl(
-  totalsByDate: Map<string, number>,
-  flowsByDate: Map<string, number>,
+  stockByDate: Map<string, number>,
+  tradesByDate: Map<string, DayTrades>,
   days: string[]
 ): DailyPnl[] {
   return days.map((date) => {
-    const total = totalsByDate.get(date);
-    const prev = totalsByDate.get(previousDay(date));
+    const stock = stockByDate.get(date);
+    const prev = stockByDate.get(previousDay(date));
+    const trades = tradesByDate.get(date) ?? null;
 
-    if (total === undefined || prev === undefined) {
-      return { date, pnl: null, percent: null, total: total ?? null };
+    const base = {
+      date,
+      stock: stock ?? null,
+      trades,
+    };
+
+    // 導入日:既沒賺也沒賠,只是把既有部位輸入進來
+    if (trades && trades.initial > 0) {
+      return { ...base, pnl: null, percent: null };
     }
 
-    const pnl = total - prev - (flowsByDate.get(date) ?? 0);
+    if (stock === undefined || prev === undefined) {
+      return { ...base, pnl: null, percent: null };
+    }
+
+    const pnl = stock - prev - (trades?.adjustment ?? 0);
 
     return {
-      date,
+      ...base,
       pnl,
-      // 前一天是 0 的話算不出比率(第一天就是這種情形)
+      // 前一天是 0 的話算不出比率
       percent: prev !== 0 ? (pnl / prev) * 100 : null,
-      total,
     };
   });
 }
