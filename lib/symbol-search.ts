@@ -14,13 +14,16 @@ export interface SymbolSuggestion {
 export const SUGGESTION_LIMIT = 8;
 
 /**
- * 把使用者打的字清成可以安全組進 PostgREST 查詢字串的樣子。
+ * 清掉 ilike 的萬用字元,讓使用者打的字一律當成字面比對。
  *
- * or() 是把條件直接串成字串送出去的,逗號、括號、點在裡面有語法意義;
- * % 與 _ 則是 ilike 的萬用字元。全部拿掉,不讓使用者打的字被當成語法解析。
+ * `%` 比對任意長度、`_` 比對單一字元 —— 不擋的話,打一個 `%` 會把整份字典撈回來。
+ *
+ * 只需要處理這兩個字元:查詢是用 ilike() 這個第一級 filter 送出去的,
+ * 值由 client 負責編碼。(改用手工組字串的 or() 就得連逗號、括號一起擋,
+ * 那也是為什麼不那樣寫 —— 順帶讓 BRK.B 這類代號的小數點得以保留。)
  */
 export function sanitizeQuery(raw: string): string {
-  return raw.trim().replace(/[,()*%_.\\]/g, '');
+  return raw.trim().replace(/[%_]/g, '');
 }
 
 /**

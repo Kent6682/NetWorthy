@@ -25,6 +25,17 @@ export default function Sheet({
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
 
+  /*
+   * onClose 放進 ref,不要進 effect 的依賴。
+   *
+   * 呼叫端傳的都是行內箭頭函式(onClose={() => setOpen(false)}),每次 render
+   * 都是新的識別。若把它列為依賴,表單裡任何一次 setState 都會讓下面的 effect
+   * 重跑,而 effect 裡的 panelRef.focus() 會把焦點從使用者正在打字的輸入框搶走
+   * —— 症狀是每打一個字就要重新點一次欄位。
+   */
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
   useEffect(() => {
     if (!open) return;
 
@@ -32,16 +43,17 @@ export default function Sheet({
     document.body.style.overflow = 'hidden';
 
     function onKeyDown(e: KeyboardEvent) {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape') onCloseRef.current();
     }
     document.addEventListener('keydown', onKeyDown);
+    // 只在開啟的那一次把焦點移進面板
     panelRef.current?.focus();
 
     return () => {
       document.body.style.overflow = previousOverflow;
       document.removeEventListener('keydown', onKeyDown);
     };
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open) return null;
 

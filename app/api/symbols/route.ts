@@ -22,19 +22,31 @@ export async function GET(request: Request) {
   if (!q) return NextResponse.json([]);
 
   const supabase = await createClient();
-  const { data, error } = await supabase
-    .from('market_symbols')
-    .select('symbol, name')
-    .eq('market', market)
-    // or() 裡的萬用字元要用 *(PostgREST 自己會換成 %),
-    // 直接寫 % 會跟百分號編碼混在一起
-    .or(`symbol.ilike.${q}*,name.ilike.*${q}*`)
-    .limit(FETCH_LIMIT);
+  const table = () => supabase.from('market_symbols').select('symbol, name').eq('market', market);
+
+  /*
+   * 兩個獨立查詢併發,而不是一句 or()。
+   *
+   * or() 是把條件手工組成字串送出去的,值裡的逗號、括號與萬用字元都得自己
+   * escape,錯了不會報錯、只會安靜地查不到東西。ilike() 是第一級的 filter,
+   * 值由 client 負責編碼,不必猜 PostgREST 的語法。
+   */
+  const [byCode, byName] = await Promise.all([
+    table().ilike('symbol', `${q}%`).limit(FETCH_LIMIT),
+    table().ilike('name', `%${q}%`).limit(FETCH_LIMIT),
+  ]);
 
   // 自動完成掛掉不該讓表單也跟著壞,回空陣列讓使用者照樣手動輸入
-  if (error) return NextResponse.json([]);
+  if (byCode.error && byName.error) return NextResponse.json([]);
 
-  const ranked = rankSuggestions((data ?? []) as SymbolSuggestion[], q);
+  // 兩邊都命中的只留一筆
+  const merged = new Map<string, SymbolSuggestion>();
+  for (const row of [...(byCode.data ?? []), ...(byName.data ?? [])]) {
+    const s = row as SymbolSuggestion;
+    if (!merged.has(s.symbol)) merged.set(s.symbol, s);
+  }
+
+  const ranked = rankSuggestions([...merged.values()], q);
 
   return NextResponse.json(ranked, {
     // 字典一天才變一次,退格重打時不用再問一次伺服器

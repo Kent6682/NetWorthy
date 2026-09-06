@@ -65,10 +65,14 @@ test('沒有結果時回空陣列,不是 undefined', () => {
   assert.deepEqual(rankSuggestions([], '2330'), []);
 });
 
-test('清掉會被當成 PostgREST 語法的字元', () => {
-  // 逗號會把 or() 的條件切斷、括號與星號有語法意義、% 與 _ 是 ilike 萬用字元
-  assert.equal(sanitizeQuery('2330,name.ilike.*'), '2330nameilike');
+test('清掉 ilike 的萬用字元,其餘原樣保留', () => {
+  // 不擋的話,打一個 % 會把整份字典撈回來
+  assert.equal(sanitizeQuery('%'), '');
+  assert.equal(sanitizeQuery('2_3%0'), '230');
   assert.equal(sanitizeQuery('  台積電  '), '台積電');
-  assert.equal(sanitizeQuery('100%'), '100');
   assert.equal(sanitizeQuery(''), '');
+
+  // 小數點與連字號要留著 —— 之後支援美股時 BRK.B、BF-B 這類代號才查得到
+  assert.equal(sanitizeQuery('BRK.B'), 'BRK.B');
+  assert.equal(sanitizeQuery('BF-B'), 'BF-B');
 });
