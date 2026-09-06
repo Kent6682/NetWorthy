@@ -81,7 +81,9 @@ export async function xxx(_prev: unknown, formData: FormData): Promise<{ error?:
 
 所有頁面都是 `export const dynamic = 'force-dynamic'` 的 async Server Component,從 `lib/queries.ts` 取資料。視角切換靠 URL search param:`parseScope(params.scope)` → `ownerIdsForScope()` 決定要納入哪些 `owner_id`。
 
-因為全部是 `force-dynamic`,**每個路由都必須有 `loading.tsx`** —— 沒有的話,點下分頁到伺服器回應前畫面完全不動,看起來像當掉。骨架的積木在 `components/Skeleton.tsx`。頁面內的多筆查詢一律用 `Promise.all` 併發,不要寫成一連串 `await`。
+**刻意不放 `loading.tsx`。** 曾經每個路由都加過,但那會在伺服器回應前把畫面清空,使用者看到的是一個沒有資訊的空殼 —— 比「畫面還沒動」更難接受。現在改成保留舊內容不動,由 `Nav` 裡的 `PendingDot`(`useLinkStatus`)在被點的分頁上標一個點。要加回骨架前請先確認這個取捨。
+
+頁面內的多筆查詢一律用 `Promise.all` 併發,不要寫成一連串 `await`。換頁慢的根本解法是減少往返與縮短距離(見 `vercel.json` 把函式釘在東京,與 Supabase 同區),不是拿骨架去蓋。
 
 `getSession()` 用 React `cache()` 包著:layout 與頁面在同一個請求裡各呼叫一次,沒有這層會讓 `auth.getUser()` 與成員查詢整組跑兩次。新增類似的「每個請求都要用到」的查詢時照這個模式。
 

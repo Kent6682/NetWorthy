@@ -1,6 +1,6 @@
 'use client';
 
-import Link from 'next/link';
+import Link, { useLinkStatus } from 'next/link';
 import { usePathname } from 'next/navigation';
 import { signOut } from '@/app/actions/auth';
 
@@ -45,6 +45,21 @@ function isActive(pathname: string, href: string) {
   return href === '/' ? pathname === '/' : pathname.startsWith(href);
 }
 
+/**
+ * 換頁中的提示。
+ *
+ * 刻意不用 loading.tsx 的整頁骨架 —— 那會在伺服器回應前先把畫面清空,
+ * 看起來像「什麼都沒有」。這裡改成保留原本的內容不動,只在被點的分頁上
+ * 標一個點,使用者可以繼續看舊資料直到新頁面備妥。
+ *
+ * 這個點永遠佔位(閒置時透明),所以出現與消失都不會造成位移。
+ * useLinkStatus 必須放在 <Link> 底下才拿得到狀態。
+ */
+function PendingDot() {
+  const { pending } = useLinkStatus();
+  return <span className="pending-dot" data-on={pending} aria-hidden />;
+}
+
 function Icon({ children }: { children: React.ReactNode }) {
   return (
     <svg
@@ -86,7 +101,7 @@ export default function Nav({ displayName }: { displayName: string }) {
                   key={link.href}
                   href={link.href}
                   aria-current={active ? 'page' : undefined}
-                  className="rounded-lg px-3 py-1.5 text-sm transition-colors"
+                  className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm transition-colors"
                   style={{
                     background: active ? 'var(--surface-sunken)' : 'transparent',
                     color: active ? 'var(--text-primary)' : 'var(--text-secondary)',
@@ -94,6 +109,7 @@ export default function Nav({ displayName }: { displayName: string }) {
                   }}
                 >
                   {link.label}
+                  <PendingDot />
                 </Link>
               );
             })}
@@ -126,6 +142,7 @@ export default function Nav({ displayName }: { displayName: string }) {
             >
               <Icon>{link.icon}</Icon>
               <span>{link.label}</span>
+              <PendingDot />
             </Link>
           );
         })}

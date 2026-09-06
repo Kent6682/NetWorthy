@@ -443,23 +443,35 @@ select.field {
 }
 
 /*
- * 換頁骨架 — 所有頁面都是 force-dynamic,伺服器回應前畫面不會動,
- * 沒有這層就會看起來像卡住。只表示「正在載入」,不假裝知道實際有幾筆資料。
- * prefers-reduced-motion 的全域規則會把下面的脈動關掉,留一塊靜態灰色。
+ * 換頁中的提示 — 標在被點的分頁上。
+ *
+ * 頁面都是 force-dynamic,伺服器回應前需要讓使用者知道有在動;
+ * 但不要用整頁骨架把內容清空,那看起來像「什麼都沒有」。
+ * 保留舊內容 + 在分頁上標一個點,是兩者之間的解法。
+ *
+ * 閒置時透明但仍佔位,所以出現與消失都不會造成位移。
+ * prefers-reduced-motion 的全域規則會把脈動關掉,留一個靜態的點。
  */
-.skeleton {
-  background: var(--surface-sunken);
-  border-radius: var(--radius-control);
-  animation: skeleton-pulse 1.4s ease-in-out infinite;
+.pending-dot {
+  width: 5px;
+  height: 5px;
+  flex: none;
+  border-radius: 50%;
+  background: transparent;
 }
 
-@keyframes skeleton-pulse {
+.pending-dot[data-on='true'] {
+  background: var(--series-1);
+  animation: pending-pulse 0.9s ease-in-out infinite;
+}
+
+@keyframes pending-pulse {
   0%,
   100% {
-    opacity: 1;
+    opacity: 0.35;
   }
   50% {
-    opacity: 0.5;
+    opacity: 1;
   }
 }
 
