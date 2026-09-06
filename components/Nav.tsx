@@ -17,6 +17,12 @@ const ICONS = {
   stocks: (
     <path d="M3 17l5-6 4 3.5L21 6M21 6h-5m5 0v5" strokeLinecap="round" strokeLinejoin="round" />
   ),
+  calendar: (
+    <>
+      <rect x="3" y="5" width="18" height="16" rx="2.5" />
+      <path d="M3 10h18M8 3v4M16 3v4" strokeLinecap="round" />
+    </>
+  ),
   accounts: (
     <>
       <rect x="2.5" y="6" width="19" height="13" rx="2.5" />
@@ -36,6 +42,7 @@ const ICONS = {
 
 const LINKS = [
   { href: '/', label: '總覽', icon: ICONS.overview },
+  { href: '/calendar', label: '日曆', icon: ICONS.calendar },
   { href: '/stocks', label: '股票', icon: ICONS.stocks },
   { href: '/accounts', label: '帳戶', icon: ICONS.accounts },
   { href: '/settings', label: '設定', icon: ICONS.settings },

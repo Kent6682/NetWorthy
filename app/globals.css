@@ -33,7 +33,19 @@
   --hairline-ring: rgba(11, 11, 11, 0.08);
   --divider: rgba(11, 11, 11, 0.06);
 
-  /* 狀態(唯一被允許帶語意的顏色)-------------------------------------- */
+  /* 狀態(唯一被允許帶語意的顏色)--------------------------------------
+     兩組刻意分開,不要混用:
+
+       --gain / --loss          財務漲跌。台股慣例是紅漲綠跌,跟歐美相反。
+       --positive / --negative  UI 的成功與錯誤。成功永遠是綠的,錯誤永遠是紅的。
+
+     混用的後果很具體:早期 .neg 同時被拿去標虧損與錯誤訊息,把顏色改成
+     台股慣例的話,全站的錯誤訊息會一起變成綠色。 */
+  --gain: #b3261e;
+  --loss: #096b2e;
+  --gain-wash: rgba(179, 38, 30, 0.08);
+  --loss-wash: rgba(9, 107, 46, 0.08);
+
   --positive: #096b2e;
   --negative: #b3261e;
   --positive-wash: rgba(9, 107, 46, 0.08);
@@ -74,6 +86,11 @@
     --hairline-ring: rgba(255, 255, 255, 0.1);
     --divider: rgba(255, 255, 255, 0.07);
 
+    --gain: #f0645c;
+    --loss: #3fbf68;
+    --gain-wash: rgba(240, 100, 92, 0.12);
+    --loss-wash: rgba(63, 191, 104, 0.12);
+
     --positive: #3fbf68;
     --negative: #f0645c;
     --positive-wash: rgba(63, 191, 104, 0.12);
@@ -108,6 +125,11 @@
   --baseline: #3a3a37;
   --hairline-ring: rgba(255, 255, 255, 0.1);
   --divider: rgba(255, 255, 255, 0.07);
+
+  --gain: #f0645c;
+  --loss: #3fbf68;
+  --gain-wash: rgba(240, 100, 92, 0.12);
+  --loss-wash: rgba(63, 191, 104, 0.12);
 
   --positive: #3fbf68;
   --negative: #f0645c;
@@ -364,12 +386,107 @@ select.field {
    狀態
    ============================================================================ */
 
+/* 財務漲跌 —— 紅漲綠跌 */
 .pos {
-  color: var(--positive);
+  color: var(--gain);
 }
 
 .neg {
+  color: var(--loss);
+}
+
+/* 錯誤訊息 —— 跟漲跌無關,永遠是紅的 */
+.error-text {
   color: var(--negative);
+}
+
+/* ============================================================================
+   每日盈虧月曆
+   ============================================================================ */
+
+.cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 1px;
+  background: var(--divider);
+  border: 1px solid var(--hairline-ring);
+  border-radius: var(--radius-card);
+  overflow: hidden;
+}
+
+.cal-weekday {
+  background: var(--surface-1);
+  padding: 7px 0;
+  text-align: center;
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+}
+
+.cal-cell {
+  position: relative;
+  min-height: 58px;
+  padding: 5px 4px;
+  background: var(--surface-1);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 2px;
+  overflow: hidden;
+}
+
+@media (min-width: 640px) {
+  .cal-cell {
+    min-height: 76px;
+    padding: 7px 6px;
+    gap: 3px;
+  }
+}
+
+/* 補空的格子(月初月末對齊星期用) */
+.cal-cell[data-empty='true'] {
+  background: var(--page-plane);
+}
+
+.cal-date {
+  font-size: 0.6875rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  line-height: 1;
+}
+
+.cal-cell[data-today='true'] .cal-date {
+  color: var(--text-primary);
+  font-weight: 700;
+}
+
+/* 金額 —— 手機也要讀得清楚,所以不再縮小 */
+.cal-amount {
+  font-size: 0.75rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.25;
+  text-align: center;
+  word-break: keep-all;
+}
+
+.cal-percent {
+  font-size: 0.6875rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+  line-height: 1;
+}
+
+/*
+ * 幅度用底色深淺表示,強度由 --cal-intensity 帶進來(0～1)。
+ * 顏色本身仍然只有紅綠兩種 —— 深淺是輔助,不是另一個維度。
+ */
+.cal-cell[data-tone='gain'] {
+  background: color-mix(in srgb, var(--gain) calc(var(--cal-intensity, 0) * 14%), var(--surface-1));
+}
+
+.cal-cell[data-tone='loss'] {
+  background: color-mix(in srgb, var(--loss) calc(var(--cal-intensity, 0) * 14%), var(--surface-1));
 }
 
 /* 漲跌標籤 */
@@ -385,11 +502,11 @@ select.field {
 }
 
 .delta-chip.pos {
-  background: var(--positive-wash);
+  background: var(--gain-wash);
 }
 
 .delta-chip.neg {
-  background: var(--negative-wash);
+  background: var(--loss-wash);
 }
 
 /* ============================================================================

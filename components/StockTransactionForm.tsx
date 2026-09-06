@@ -357,7 +357,7 @@ export default function StockTransactionForm({
                     交割帳戶
                   </label>
                   {brokerAccounts.length === 0 ? (
-                    <p className="text-xs leading-relaxed neg">
+                    <p className="text-xs leading-relaxed error-text">
                       你還沒有券商虛擬帳戶。請先到「帳戶」頁新增一個,或取消上面的勾選。
                     </p>
                   ) : (
@@ -376,7 +376,7 @@ export default function StockTransactionForm({
           )}
 
           {state?.error && (
-            <p className="neg mt-3 text-sm leading-relaxed">{state.error}</p>
+            <p className="error-text mt-3 text-sm leading-relaxed">{state.error}</p>
           )}
         </form>
       </Sheet>

@@ -71,7 +71,7 @@ export default function LoginPage() {
               )}
             </div>
 
-            {state?.error && <p className="neg text-sm leading-relaxed">{state.error}</p>}
+            {state?.error && <p className="error-text text-sm leading-relaxed">{state.error}</p>}
 
             {state?.notice && (
               <p

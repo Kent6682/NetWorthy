@@ -129,7 +129,7 @@ export default function TransferForm({ accounts }: { accounts: AccountBalance[] 
             跨幣別轉帳請分別用「提出」與「存入」記錄實際金額。
           </p>
 
-          {state?.error && <p className="neg mt-3 text-sm leading-relaxed">{state.error}</p>}
+          {state?.error && <p className="error-text mt-3 text-sm leading-relaxed">{state.error}</p>}
         </form>
       </Sheet>
     </>

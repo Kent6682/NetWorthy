@@ -73,7 +73,7 @@ export default function OnboardingPage() {
             </div>
           )}
 
-          {state?.error && <p className="neg text-sm leading-relaxed">{state.error}</p>}
+          {state?.error && <p className="error-text text-sm leading-relaxed">{state.error}</p>}
 
           <button type="submit" className="btn btn-primary w-full" disabled={pending}>
             {pending ? '處理中…' : '完成'}

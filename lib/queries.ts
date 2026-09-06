@@ -109,6 +109,60 @@ export async function getLatestPrices(): Promise<LatestPrice[]> {
   return (data ?? []).map((p) => ({ ...p, close_price: Number(p.close_price) })) as LatestPrice[];
 }
 
+/** 日曆用:指定區間的每日快照(要含起始日的前一天,才算得出第一天的盈虧) */
+export async function getSnapshotRange(
+  scope: Scope,
+  userId: string,
+  from: string,
+  to: string
+): Promise<NetWorthSnapshot[]> {
+  const supabase = await createClient();
+
+  let query = supabase
+    .from('daily_net_worth_snapshots')
+    .select('snapshot_date, cash_twd, stock_twd, total_twd, owner_id')
+    .gte('snapshot_date', from)
+    .lte('snapshot_date', to)
+    .order('snapshot_date');
+
+  query = scope === 'family' ? query.is('owner_id', null) : query.eq('owner_id', userId);
+
+  const { data } = await query;
+  return (data ?? []) as NetWorthSnapshot[];
+}
+
+/**
+ * 日曆用:每天的淨外部資金流入,用來從盈虧裡扣掉。
+ *
+ * 只算 deposit 與 withdraw,而且只算不是股票交易連動產生的那些:
+ *   - 轉出 / 轉入  帳戶間搬錢,成對記錄本來就互相抵銷
+ *   - 股票交割    現金變股票,總資產不變(這些列的 stock_transaction_id 不是 null)
+ *   - 對帳調整    帳務更正,錢一直都在只是漏記。算成盈虧會產生假的尖峰
+ */
+export async function getExternalFlows(
+  ownerIds: string[],
+  from: string,
+  to: string
+): Promise<Map<string, number>> {
+  const supabase = await createClient();
+
+  const { data } = await supabase
+    .from('account_transactions')
+    .select('transaction_date, signed_amount, accounts!inner(owner_id)')
+    .in('accounts.owner_id', ownerIds)
+    .in('type', ['deposit', 'withdraw'])
+    .is('stock_transaction_id', null)
+    .gte('transaction_date', from)
+    .lte('transaction_date', to);
+
+  const flows = new Map<string, number>();
+  for (const row of data ?? []) {
+    const date = row.transaction_date as string;
+    flows.set(date, (flows.get(date) ?? 0) + Number(row.signed_amount));
+  }
+  return flows;
+}
+
 /** 首頁趨勢線資料:個人視角取自己那列,全家視角取 owner_id 為 null 的合計列 */
 export async function getSnapshots(
   scope: Scope,

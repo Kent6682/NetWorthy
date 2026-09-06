@@ -42,6 +42,14 @@ export function formatCompact(value: number): string {
   return `${sign}${Math.round(abs).toLocaleString('en-US')}`;
 }
 
+/** 帶正負號的壓縮金額,給盈虧用:+2.3萬 / -8,450 / 0 */
+export function formatSignedCompact(value: number): string {
+  const rounded = Math.round(value);
+  if (rounded === 0) return '0';
+  // formatCompact 自己會帶負號,只要補正號
+  return `${rounded > 0 ? '+' : ''}${formatCompact(rounded)}`;
+}
+
 /** YYYY-MM-DD → 2026/8/19 */
 export function formatDate(value: string): string {
   const [y, m, d] = value.split('-');

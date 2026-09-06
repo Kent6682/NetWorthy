@@ -107,7 +107,7 @@ export default function AccountTransactionForm({ accountId }: { accountId: strin
         </div>
       </div>
 
-      {state?.error && <p className="neg mt-3 text-sm leading-relaxed">{state.error}</p>}
+      {state?.error && <p className="error-text mt-3 text-sm leading-relaxed">{state.error}</p>}
 
       <button type="submit" className="btn btn-primary mt-4 w-full sm:w-auto" disabled={pending}>
         {pending ? '儲存中…' : '新增'}

@@ -120,7 +120,7 @@ export default function AccountForm() {
             這樣才留得住完整的資金軌跡。
           </p>
 
-          {state?.error && <p className="neg mt-3 text-sm leading-relaxed">{state.error}</p>}
+          {state?.error && <p className="error-text mt-3 text-sm leading-relaxed">{state.error}</p>}
         </form>
       </Sheet>
     </>

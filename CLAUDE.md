@@ -96,6 +96,8 @@ export async function xxx(_prev: unknown, formData: FormData): Promise<{ error?:
 
 - 沒有 UI 套件、沒有圖表套件。`DonutChart` 與 `TrendChart` 是手寫 SVG(含 `touchmove` 取值)。
 - Tailwind 只負責版面;元件樣式是 `app/globals.css` 裡手寫的一層:`.card`、`.field`、`.btn-*`、`.sheet-*`、`.tabbar-*`、`.container-app`、`.tnum`(等寬數字)、`.pos`/`.neg`(損益色)、`.eyebrow`。加新元件前先看這裡有沒有現成的。
+- **漲跌色與狀態色是兩組,不要混用。** `--gain`(紅)/ `--loss`(綠)是財務漲跌,照台股慣例;`--positive`(綠)/ `--negative`(紅)是 UI 的成功與錯誤。對應的 class:`.pos` / `.neg` 只給金額,錯誤訊息用 `.error-text`。
+  混用會出事:早期 `.neg` 同時被拿去標虧損與錯誤訊息,改成台股慣例時全站的錯誤訊息會一起變綠。
 - **顏色一律用 CSS 變數**,不要寫死色碼,也不要用 Tailwind 的預設色階。深色模式在 `globals.css` 定義了兩次(`@media (prefers-color-scheme: dark)` 與 `:root[data-theme='dark']`),改色票要兩邊都改。`--series-1` 到 `--series-8` 是圖表分類色盤,依固定順序取用、不循環,兩種模式都通過色盲安全性驗證,不要隨意換色。
 - 手機與桌機是兩套版面而非縮放,斷點 768px:手機底部分頁 + 卡片列表 + 底部滑出面板;桌機頂部導覽 + 完整表格 + 置中對話框。輸入框字級固定 16px(避免 iOS 聚焦時放大畫面),觸控目標最小 44px。
 
