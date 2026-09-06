@@ -5,7 +5,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { explainWriteError } from '../scripts/sync-prices.ts';
+import { explainWriteError } from '../scripts/db.ts';
 
 test('RLS 阻擋:依錯誤訊息判斷(Supabase 實際回傳的字串)', () => {
   const err = explainWriteError(

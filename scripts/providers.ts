@@ -188,6 +188,142 @@ export async function fetchTwSymbols(): Promise<SymbolRow[]> {
 }
 
 // ---------------------------------------------------------------------------
+// 歷史收盤價(回填用)
+// ---------------------------------------------------------------------------
+
+const TWSE_MONTH_URL = 'https://www.twse.com.tw/rwd/zh/afterTrading/STOCK_DAY';
+const TPEX_MONTH_URL = 'https://www.tpex.org.tw/www/zh-tw/afterTrading/tradingStock';
+
+/** 兩邊的每日列都是 [日期, ..., 開, 高, 低, 收, ...],收盤價固定在 index 6 */
+const CLOSE_INDEX = 6;
+
+function collectMonthRows(rows: unknown, into: Map<string, number>): void {
+  if (!Array.isArray(rows)) return;
+  for (const row of rows) {
+    if (!Array.isArray(row)) continue;
+    const date = rocToIso(String(row[0] ?? ''));
+    const close = toNumber(row[CLOSE_INDEX]);
+    if (date && close !== null) into.set(date, close);
+  }
+}
+
+/**
+ * 台股某一檔的歷史收盤價。`months` 是 YYYYMM 字串陣列,一個月一次請求。
+ *
+ * 先把所有月份都跟證交所要;整批都沒有資料才改問櫃買 —— 一檔股票不會既上市
+ * 又上櫃,所以用「全部落空」來判斷比每個月各試兩次省一半請求。
+ *
+ * 呼叫端要自己控制節奏:證交所對連續請求會擋。
+ */
+export async function fetchTwHistory(
+  symbol: string,
+  months: string[],
+  onRequest?: () => Promise<void>
+): Promise<Map<string, number>> {
+  const closes = new Map<string, number>();
+
+  for (const ym of months) {
+    if (onRequest) await onRequest();
+    try {
+      const json = await fetchJson<{ stat?: string; data?: unknown }>(
+        `${TWSE_MONTH_URL}?date=${ym}01&stockNo=${encodeURIComponent(symbol)}&response=json`
+      );
+      if (json.stat === 'OK') collectMonthRows(json.data, closes);
+    } catch (err) {
+      console.warn(`  證交所 ${symbol} ${ym} 抓取失敗:${(err as Error).message}`);
+    }
+  }
+
+  if (closes.size > 0) return closes;
+
+  // 證交所整批落空 → 改當成上櫃
+  for (const ym of months) {
+    if (onRequest) await onRequest();
+    try {
+      const json = await fetchJson<{ tables?: { data?: unknown }[] }>(
+        `${TPEX_MONTH_URL}?code=${encodeURIComponent(symbol)}` +
+          `&date=${ym.slice(0, 4)}/${ym.slice(4)}/01&response=json`
+      );
+      for (const table of json.tables ?? []) collectMonthRows(table.data, closes);
+    } catch (err) {
+      console.warn(`  櫃買 ${symbol} ${ym} 抓取失敗:${(err as Error).message}`);
+    }
+  }
+
+  return closes;
+}
+
+interface YahooHistory {
+  chart: {
+    result?: Array<{
+      timestamp?: number[];
+      indicators: { quote: Array<{ close?: (number | null)[] }> };
+    }>;
+  };
+}
+
+/** Yahoo 的區間查詢:一次請求就拿回整段,美股與匯率共用 */
+async function fetchYahooRange(
+  ticker: string,
+  from: string,
+  to: string
+): Promise<Map<string, number>> {
+  const period1 = Math.floor(Date.parse(`${from}T00:00:00Z`) / 1000);
+  // 多要一天,避免時區把最後一天切掉
+  const period2 = Math.floor(Date.parse(`${to}T00:00:00Z`) / 1000) + 86400;
+
+  const out = new Map<string, number>();
+  const data = await fetchJson<YahooHistory>(
+    `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}` +
+      `?interval=1d&period1=${period1}&period2=${period2}`
+  );
+
+  const result = data.chart?.result?.[0];
+  if (!result) return out;
+
+  const stamps = result.timestamp ?? [];
+  const closes = result.indicators?.quote?.[0]?.close ?? [];
+  for (let i = 0; i < stamps.length; i += 1) {
+    const close = closes[i];
+    if (close == null) continue;
+    out.set(new Date(stamps[i] * 1000).toISOString().slice(0, 10), close);
+  }
+  return out;
+}
+
+/** 美股某一檔的歷史收盤價 */
+export async function fetchUsHistory(
+  symbol: string,
+  from: string,
+  to: string
+): Promise<Map<string, number>> {
+  try {
+    return await fetchYahooRange(symbol, from, to);
+  } catch (err) {
+    console.warn(`  Yahoo 抓 ${symbol} 歷史失敗:${(err as Error).message}`);
+    return new Map();
+  }
+}
+
+/**
+ * 美元兌台幣的歷史匯率。
+ *
+ * 走 Yahoo 的 TWD=X —— 一次請求拿回整段,而且跟美股共用同一條解析路徑。
+ * (每日同步用的 open.er-api 與 Frankfurter 都只給當下的匯率,沒有區間查詢。)
+ */
+export async function fetchUsdTwdHistory(
+  from: string,
+  to: string
+): Promise<Map<string, number>> {
+  try {
+    return await fetchYahooRange('TWD=X', from, to);
+  } catch (err) {
+    console.warn(`  Yahoo 抓歷史匯率失敗:${(err as Error).message}`);
+    return new Map();
+  }
+}
+
+// ---------------------------------------------------------------------------
 // 美股
 // ---------------------------------------------------------------------------
 

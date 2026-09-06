@@ -10,7 +10,8 @@
     "start": "next start",
     "lint": "next lint",
     "test": "node --test --experimental-strip-types tests/*.test.ts",
-    "sync": "node --experimental-strip-types scripts/sync-prices.ts"
+    "sync": "node --experimental-strip-types scripts/sync-prices.ts",
+    "backfill": "node --experimental-strip-types scripts/backfill.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.7.0",

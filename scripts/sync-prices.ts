@@ -9,8 +9,9 @@
  */
 
 import { pathToFileURL } from 'node:url';
-import { createClient, type SupabaseClient } from '@supabase/supabase-js';
-import { calculateHoldings, type StockTransaction } from '../lib/holdings.ts';
+import { db, explainWriteError } from './db.ts';
+import { computeSnapshotRows } from '../lib/snapshots.ts';
+import { loadSnapshotSources, replaceSnapshots } from './snapshot-data.ts';
 import {
   fetchTpexCloses,
   fetchTwSymbols,
@@ -20,69 +21,10 @@ import {
   type PriceRow,
 } from './providers.ts';
 
-/**
- * 延遲建立 client:模組被 import 時(例如單元測試)不該因為缺環境變數就中止行程,
- * 真正要連資料庫時才檢查。
- */
-let client: SupabaseClient | null = null;
-
-function db() {
-  if (client) return client;
-
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-  if (!url || !key) {
-    throw new Error(
-      '缺少環境變數 NEXT_PUBLIC_SUPABASE_URL 或 SUPABASE_SERVICE_ROLE_KEY。\n' +
-        '在 GitHub 上請到 repo 的 Settings → Secrets and variables → Actions 設定這兩個 Secret。'
-    );
-  }
-
-  client = createClient(url, key, {
-    auth: { persistSession: false, autoRefreshToken: false },
-  });
-  return client;
-}
-
 const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Taipei' });
 
 function log(msg: string) {
   console.log(msg);
-}
-
-/**
- * 把資料庫的寫入錯誤翻譯成看得懂的訊息。
- *
- * 最常見的狀況是 SUPABASE_SERVICE_ROLE_KEY 填成了 publishable / anon 金鑰 ——
- * Postgres 只會回一句「violates row-level security policy」,完全看不出是金鑰的問題。
- */
-export function explainWriteError(
-  error: { message: string; code?: string },
-  what: string
-): Error {
-  const isRlsBlock =
-    error.code === '42501' || /row-level security|violates row-level/i.test(error.message);
-
-  if (!isRlsBlock) return new Error(`${what}失敗:${error.message}`);
-
-  return new Error(
-    [
-      `${what}失敗:資料庫的 Row Level Security 擋下了寫入。`,
-      '',
-      '這幾乎一定是 SUPABASE_SERVICE_ROLE_KEY 這個 Secret 填錯了 ——',
-      '目前這把金鑰沒有繞過 RLS 的權限,代表它是給瀏覽器用的公開金鑰。',
-      '',
-      '修正方式:',
-      '  1. Supabase 後台 → Settings → API Keys → 「Publishable and secret API keys」分頁',
-      '  2. 複製名稱為 default 的 secret key(開頭是 sb_secret_,不是 sb_publishable_)',
-      '  3. GitHub repo → Settings → Secrets and variables → Actions',
-      '     覆蓋 SUPABASE_SERVICE_ROLE_KEY 這個 Secret',
-      '',
-      '注意:publishable 與 anon 金鑰受 RLS 限制,不能用在這支腳本 ——',
-      '它必須跨所有家庭成員讀寫資料才算得出總資產快照。',
-    ].join('\n')
-  );
 }
 
 /**
@@ -245,137 +187,29 @@ async function syncFx(): Promise<number> {
 // 4. 重算每日總資產快照
 // ---------------------------------------------------------------------------
 
-interface SnapshotRow {
-  household_id: string;
-  owner_id: string | null;
-  snapshot_date: string;
-  cash_twd: number;
-  stock_twd: number;
-  total_twd: number;
-}
-
 async function rebuildSnapshots(usdToTwd: number): Promise<number> {
-  // 成員 → 家庭
-  const { data: profiles, error: profileError } = await db()
-    .from('profiles')
-    .select('id, household_id')
-    .not('household_id', 'is', null);
-  if (profileError) throw new Error(`讀取成員失敗:${profileError.message}`);
-  if (!profiles || profiles.length === 0) {
+  const sources = await loadSnapshotSources();
+  if (!sources) {
     log('快照:還沒有設定家庭的使用者,跳過');
     return 0;
   }
 
-  // 帳戶餘額(由流水帳累加)
-  const { data: accounts, error: acctError } = await db()
-    .from('accounts')
-    .select('id, owner_id, currency, is_archived');
-  if (acctError) throw new Error(`讀取帳戶失敗:${acctError.message}`);
-
-  const { data: acctTxns, error: txnError } = await db()
-    .from('account_transactions')
-    .select('account_id, signed_amount')
-    .lte('transaction_date', today);
-  if (txnError) throw new Error(`讀取帳戶收支失敗:${txnError.message}`);
-
-  const balanceByAccount = new Map<string, number>();
-  for (const t of acctTxns ?? []) {
-    balanceByAccount.set(
-      t.account_id,
-      (balanceByAccount.get(t.account_id) ?? 0) + Number(t.signed_amount)
-    );
-  }
-
-  const cashByOwner = new Map<string, number>();
-  for (const a of accounts ?? []) {
-    if (a.is_archived) continue;
-    const raw = balanceByAccount.get(a.id) ?? 0;
-    const twd = a.currency === 'USD' ? raw * usdToTwd : raw;
-    cashByOwner.set(a.owner_id, (cashByOwner.get(a.owner_id) ?? 0) + twd);
-  }
-
-  // 股票市值
-  const { data: stockTxns, error: stockError } = await db()
-    .from('stock_transactions')
-    .select('id, owner_id, symbol, type, shares, price, fee, transaction_date, created_at')
-    .lte('transaction_date', today);
-  if (stockError) throw new Error(`讀取股票交易失敗:${stockError.message}`);
-
-  const { data: stocks } = await db().from('stocks').select('symbol, currency');
   const { data: latest } = await db()
     .from('latest_stock_prices')
     .select('symbol, close_price');
-
-  const currencyBySymbol = new Map((stocks ?? []).map((s) => [s.symbol, s.currency]));
   const priceBySymbol = new Map((latest ?? []).map((p) => [p.symbol, Number(p.close_price)]));
 
-  const normalized: StockTransaction[] = (stockTxns ?? []).map((t) => ({
-    ...t,
-    shares: Number(t.shares),
-    price: Number(t.price),
-    fee: Number(t.fee),
-  })) as StockTransaction[];
+  const rows = computeSnapshotRows(
+    sources,
+    today,
+    (symbol) => priceBySymbol.get(symbol) ?? null,
+    usdToTwd
+  );
 
-  const stockByOwner = new Map<string, number>();
-  for (const h of calculateHoldings(normalized)) {
-    if (h.shares <= 0) continue;
-    // 沒有報價時退回成本價,總資產不會因為缺一天報價就憑空少一塊
-    const price = priceBySymbol.get(h.symbol) ?? h.avgCost;
-    const value = h.shares * price;
-    const twd = currencyBySymbol.get(h.symbol) === 'USD' ? value * usdToTwd : value;
-    stockByOwner.set(h.ownerId, (stockByOwner.get(h.ownerId) ?? 0) + twd);
-  }
+  await replaceSnapshots([today], rows);
 
-  // 組出每人一列 + 每個家庭一列合計
-  const rows: SnapshotRow[] = [];
-  const householdTotals = new Map<string, { cash: number; stock: number }>();
-
-  for (const p of profiles) {
-    const cash = cashByOwner.get(p.id) ?? 0;
-    const stock = stockByOwner.get(p.id) ?? 0;
-
-    rows.push({
-      household_id: p.household_id!,
-      owner_id: p.id,
-      snapshot_date: today,
-      cash_twd: round2(cash),
-      stock_twd: round2(stock),
-      total_twd: round2(cash + stock),
-    });
-
-    const agg = householdTotals.get(p.household_id!) ?? { cash: 0, stock: 0 };
-    agg.cash += cash;
-    agg.stock += stock;
-    householdTotals.set(p.household_id!, agg);
-  }
-
-  for (const [householdId, agg] of householdTotals) {
-    rows.push({
-      household_id: householdId,
-      owner_id: null, // null = 全家合計
-      snapshot_date: today,
-      cash_twd: round2(agg.cash),
-      stock_twd: round2(agg.stock),
-      total_twd: round2(agg.cash + agg.stock),
-    });
-  }
-
-  // 先刪掉今天的舊資料再寫入,重跑同一天不會產生重複
-  const { error: deleteError } = await db()
-    .from('daily_net_worth_snapshots')
-    .delete()
-    .eq('snapshot_date', today);
-  if (deleteError) throw explainWriteError(deleteError, '清除今日快照');
-
-  const { error: insertError } = await db().from('daily_net_worth_snapshots').insert(rows);
-  if (insertError) throw explainWriteError(insertError, '寫入快照');
-
-  log(`快照:寫入 ${rows.length} 列(${profiles.length} 位成員 + ${householdTotals.size} 個家庭合計)`);
+  log(`快照:寫入 ${rows.length} 列(${sources.profiles.length} 位成員 + 家庭合計)`);
   return rows.length;
-}
-
-function round2(v: number): number {
-  return Math.round(v * 100) / 100;
 }
 
 // ---------------------------------------------------------------------------

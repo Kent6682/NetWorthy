@@ -10,8 +10,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 npm install
 npm run dev      # http://localhost:3000
 npm run build
-npm test         # node --test,38 個測試,不連網(但要先 npm install)
+npm test         # node --test,50 個測試,不連網(但要先 npm install)
 npm run sync     # 手動跑一次每日同步(需 SUPABASE_SERVICE_ROLE_KEY)
+npm run backfill # 從第一筆交易重算所有歷史快照(同上,需金鑰)
 ```
 
 跑單一測試檔或單一測試:
@@ -48,7 +49,11 @@ node --test --experimental-strip-types --test-name-pattern="零股" tests/holdin
 
 `stocks` 與 `market_symbols` 是兩回事,不要混用:`stocks` 只放這個家庭真的交易過的標的(被 `stock_transactions` 以外鍵參照),`market_symbols` 是每日同步整批 upsert 進來的**全市場代號字典**,只服務「新增交易時打代號自動帶出商品名稱」這件事,而且只新增不刪除。
 
-`daily_net_worth_snapshots` 是同步腳本每天整批重算的衍生資料:先刪掉當天所有列再重寫,所以同一天重跑不會重複。每位成員一列,另外每個家庭多一列 ``owner_id` IS NULL` 的合計 —— 首頁「全家」視角讀的就是那一列。
+`daily_net_worth_snapshots` 是同步腳本每天整批重算的衍生資料:先刪掉那些日期的列再重寫,所以重跑不會重複。每位成員一列,另外每個家庭多一列 ``owner_id` IS NULL` 的合計 —— 首頁「全家」視角讀的就是那一列。
+
+**每日同步只寫「今天」,不會回頭修正過去。** 所以補登一筆日期在過去的交易(最典型的是期初持股填了幾個月前的持有起始日)之後,那段期間的快照會停留在舊值,趨勢圖留下一道永久的斷崖。修正方式是跑 `npm run backfill`(或 GitHub Actions 的「回填歷史資產快照」)。
+
+快照的計算本身在 `lib/snapshots.ts` 的 `computeSnapshotRows()`,**每日同步與回填共用這一份**。它自己依日期過濾交易,所以回填撈一次資料就能算出好幾個月的每一天。要改算法只能改那裡。
 
 ## 幣別與缺資料的處理
 
