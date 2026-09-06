@@ -16,7 +16,11 @@
 import { pathToFileURL } from 'node:url';
 import { db, explainWriteError } from './db.ts';
 import { carryForward, computeSnapshotRows, eachDay } from '../lib/snapshots.ts';
-import { loadSnapshotSources, replaceSnapshots } from './snapshot-data.ts';
+import {
+  clearSnapshotsOutside,
+  loadSnapshotSources,
+  replaceSnapshots,
+} from './snapshot-data.ts';
 import { fetchTwHistory, fetchUsHistory, fetchUsdTwdHistory } from './providers.ts';
 
 const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Taipei' });
@@ -172,8 +176,16 @@ async function main() {
     )
   );
 
+  /*
+   * 先清掉區間以外的快照。
+   *
+   * 把最早一筆交易的日期往後改之後,舊區間前面那段會變成孤兒 ——
+   * 那些日子其實你還沒持有任何東西,留著趨勢圖就會有一段憑空的資產。
+   */
+  await clearSnapshotsOutside(from, today);
   await replaceSnapshots(days, rows);
   log(`  ${days.length} 天 × ${sources.profiles.length} 位成員 + 家庭合計 = ${rows.length} 列`);
+  log(`  ${from} 之前與 ${today} 之後的舊快照已清除`);
 
   log('\n完成');
 }
