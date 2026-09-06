@@ -6,6 +6,8 @@
 技術棧:**Next.js 16** + **Supabase**(Postgres + Auth)+ **Vercel**(部署)+ **GitHub Actions**(每日排程)
 全部都在各家的免費額度內。
 
+這份 README 講的是部署與維運。實際怎麼操作請看 **[使用手冊](docs/使用手冊.md)**。
+
 ---
 
 ## 功能
