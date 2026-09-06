@@ -422,16 +422,20 @@ select.field {
   color: var(--text-muted);
 }
 
+/*
+ * 手機一格只有約 49px 寬,要塞下日期、金額、漲跌幅三行。
+ * 內距收到 2px、字級縮一級才放得下六個字的金額(例如 +34.5萬)。
+ */
 .cal-cell {
   position: relative;
-  min-height: 58px;
-  padding: 5px 4px;
+  min-height: 64px;
+  padding: 5px 2px;
   background: var(--surface-1);
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: flex-start;
-  gap: 2px;
+  gap: 1px;
   overflow: hidden;
 }
 
@@ -480,21 +484,32 @@ a.cal-cell:focus-visible {
   font-weight: 700;
 }
 
-/* 金額 —— 手機也要讀得清楚,所以不再縮小 */
 .cal-amount {
-  font-size: 0.75rem;
+  font-size: 0.6875rem;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
-  line-height: 1.25;
+  line-height: 1.2;
   text-align: center;
-  word-break: keep-all;
+  white-space: nowrap;
 }
 
 .cal-percent {
-  font-size: 0.6875rem;
+  font-size: 0.625rem;
   font-variant-numeric: tabular-nums;
   color: var(--text-secondary);
-  line-height: 1;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+@media (min-width: 640px) {
+  .cal-amount {
+    font-size: 0.75rem;
+    line-height: 1.25;
+  }
+
+  .cal-percent {
+    font-size: 0.6875rem;
+  }
 }
 
 /*

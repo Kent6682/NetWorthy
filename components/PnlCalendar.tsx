@@ -148,9 +148,7 @@ export default function PnlCalendar({
                       {formatSignedCompact(pnl)}
                     </span>
                     {row?.percent !== null && row?.percent !== undefined && (
-                      <span className="cal-percent hidden sm:block">
-                        {formatPercent(row.percent)}
-                      </span>
+                      <span className="cal-percent">{formatPercent(row.percent)}</span>
                     )}
                   </>
                 )
