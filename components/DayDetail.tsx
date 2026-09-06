@@ -1,4 +1,4 @@
-import { formatDate, formatMoney, formatPrice, formatShares } from '@/lib/format';
+import { formatDate, formatMoney, formatPercent, formatPrice, formatShares } from '@/lib/format';
 import { STOCK_TXN_LABEL } from '@/lib/types';
 import type { HoldingPnl } from '@/lib/pnl';
 
@@ -25,6 +25,12 @@ function Pnl({ value }: { value: number | null }) {
       {formatMoney(value)}
     </span>
   );
+}
+
+/** 盈虧佔前一日市值的比率;當天才建立的部位沒有基準 */
+function Percent({ value }: { value: number | null }) {
+  if (value === null) return <span style={{ color: 'var(--text-muted)' }}>—</span>;
+  return <span className={`tnum ${value >= 0 ? 'pos' : 'neg'}`}>{formatPercent(value)}</span>;
 }
 
 export default function DayDetail({
@@ -70,7 +76,10 @@ export default function DayDetail({
               <div key={row.symbol} className="px-4 py-3">
                 <div className="flex items-baseline justify-between gap-3">
                   <span className="truncate text-sm font-medium">{row.symbol}</span>
-                  <Pnl value={row.pnl} />
+                  <span className="flex shrink-0 items-baseline gap-2 text-sm">
+                    <Percent value={row.percent} />
+                    <Pnl value={row.pnl} />
+                  </span>
                 </div>
                 <div
                   className="mt-1 flex items-baseline justify-between gap-3 text-xs"
@@ -103,6 +112,7 @@ export default function DayDetail({
                   <th className="px-3 py-2 text-right font-normal">股數</th>
                   <th className="px-3 py-2 text-right font-normal">前日收盤</th>
                   <th className="px-3 py-2 text-right font-normal">當日收盤</th>
+                  <th className="px-3 py-2 text-right font-normal">漲跌幅</th>
                   <th className="px-5 py-2 text-right font-normal">盈虧</th>
                 </tr>
               </thead>
@@ -135,6 +145,9 @@ export default function DayDetail({
                       {formatPrice(row.prevPrice)}
                     </td>
                     <td className="px-3 py-2.5 text-right">{formatPrice(row.price)}</td>
+                    <td className="px-3 py-2.5 text-right">
+                      <Percent value={row.percent} />
+                    </td>
                     <td className="px-5 py-2.5 text-right font-medium">
                       <Pnl value={row.pnl} />
                     </td>

@@ -171,6 +171,8 @@ export interface HoldingPnl {
   prevPrice: number;
   /** null 代表這檔當天是導入既有部位,不計盈虧 */
   pnl: number | null;
+  /** 盈虧佔前一日市值的百分比;當天才建立的部位沒有基準,是 null */
+  percent: number | null;
   trades: TradeRow[];
 }
 
@@ -221,13 +223,18 @@ export function computeHoldingPnl(
       else adjustment -= t.shares * t.price - t.fee;
     }
 
+    const prevValue = prevShares * prevPrice;
+    const pnl = imported ? null : shares * price - prevValue - adjustment;
+
     rows.push({
       symbol,
       shares,
       prevShares,
       price,
       prevPrice,
-      pnl: imported ? null : shares * price - prevShares * prevPrice - adjustment,
+      pnl,
+      // 基準是前一日的市值。當天才建立的部位沒有前一日,給不出比率
+      percent: pnl === null || prevValue === 0 ? null : (pnl / prevValue) * 100,
       trades,
     });
   }

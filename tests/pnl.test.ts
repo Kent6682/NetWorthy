@@ -287,6 +287,37 @@ test('明細依影響大小排序,買賣當天扣掉部位變動', () => {
   assert.equal(rows[0].symbol, '2330', '影響最大的排前面');
 });
 
+test('每檔的漲跌幅以前一日市值為基準', () => {
+  const txns = [stockTxn({ symbol: '2330', shares: 1000, price: 500 })];
+  const at = buildPriceLookup([
+    { symbol: '2330', price_date: '2026-09-02', close_price: 500 },
+    { symbol: '2330', price_date: '2026-09-03', close_price: 520 },
+  ]);
+
+  const row = computeHoldingPnl(txns, '2026-09-03', at)[0];
+  assert.equal(row.pnl, 20000);
+  assert.equal(row.percent, 4, '20,000 ÷ 500,000');
+});
+
+test('當天才建立的部位沒有前一日,不給漲跌幅', () => {
+  const txns = [
+    stockTxn({
+      symbol: '2330',
+      type: 'buy',
+      shares: 1000,
+      price: 500,
+      transaction_date: '2026-09-03',
+      created_at: '2026-09-03T00:00:00Z',
+    }),
+  ];
+  const at = buildPriceLookup([{ symbol: '2330', price_date: '2026-09-03', close_price: 520 }]);
+
+  const row = computeHoldingPnl(txns, '2026-09-03', at)[0];
+  assert.equal(row.prevShares, 0);
+  assert.equal(row.pnl, 20000, '從成交價 500 收在 520');
+  assert.equal(row.percent, null, '除以 0 不該產生 Infinity');
+});
+
 test('導入當天那一檔不給盈虧', () => {
   const txns = [stockTxn({ symbol: '2330', transaction_date: '2026-09-03' })];
   const at = buildPriceLookup([{ symbol: '2330', price_date: '2026-09-03', close_price: 520 }]);
