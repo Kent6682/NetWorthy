@@ -7,8 +7,9 @@ import {
   buildAssetSlices,
   buildValuedHoldings,
   computeTotals,
+  parseRange,
+  rangeStartDate,
   RANGE_OPTIONS,
-  type RangeKey,
 } from '@/lib/portfolio';
 import {
   getAccountBalances,
@@ -62,13 +63,14 @@ export default async function DashboardPage({
 }) {
   const params = await searchParams;
   const scope = parseScope(params.scope);
-  const rangeKey = (RANGE_OPTIONS.find((r) => r.key === params.range)?.key ?? '6m') as RangeKey;
+  const rangeKey = parseRange(params.range);
   const rangeOption = RANGE_OPTIONS.find((r) => r.key === rangeKey)!;
 
   const session = await getSession();
   if (!session) return null;
 
   const ownerIds = ownerIdsForScope(scope, session.userId, session.members);
+  const since = rangeStartDate(rangeKey, todayInTaipei());
 
   const [{ rate: usdToTwd, date: fxDate }, balances, transactions, stocks, prices, snapshots] =
     await Promise.all([
@@ -77,7 +79,7 @@ export default async function DashboardPage({
       getStockTransactions(ownerIds),
       getStocks(),
       getLatestPrices(),
-      getSnapshots(scope, session.userId, rangeOption.months),
+      getSnapshots(scope, session.userId, since),
     ]);
 
   const holdings = buildValuedHoldings(transactions, stocks, prices, usdToTwd);

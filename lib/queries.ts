@@ -208,22 +208,23 @@ export async function getTradingDays(from: string, to: string): Promise<Set<stri
   return new Set((data ?? []).map((r) => r.price_date as string));
 }
 
-/** 首頁趨勢線資料:個人視角取自己那列,全家視角取 owner_id 為 null 的合計列 */
+/**
+ * 首頁趨勢線資料:個人視角取自己那列,全家視角取 owner_id 為 null 的合計列。
+ *
+ * 起算日由呼叫端算好傳進來(lib/portfolio.ts 的 rangeStartDate)——
+ * 「1 日」與「年初至今」不是固定月數,不能在這裡用月份回推。
+ */
 export async function getSnapshots(
   scope: Scope,
   userId: string,
-  months: number
+  since: string
 ): Promise<NetWorthSnapshot[]> {
   const supabase = await createClient();
-
-  const since = new Date();
-  since.setMonth(since.getMonth() - months);
-  const sinceStr = since.toISOString().slice(0, 10);
 
   let query = supabase
     .from('daily_net_worth_snapshots')
     .select('snapshot_date, cash_twd, stock_twd, total_twd, owner_id')
-    .gte('snapshot_date', sinceStr)
+    .gte('snapshot_date', since)
     .order('snapshot_date');
 
   query = scope === 'family' ? query.is('owner_id', null) : query.eq('owner_id', userId);

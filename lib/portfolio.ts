@@ -150,12 +150,55 @@ export function computeTotals(
 
 /** 首頁趨勢圖的可選期間 */
 export const RANGE_OPTIONS = [
-  { key: '1m', label: '1 個月', months: 1 },
-  { key: '3m', label: '3 個月', months: 3 },
-  { key: '6m', label: '6 個月', months: 6 },
-  { key: '1y', label: '1 年', months: 12 },
-  { key: '3y', label: '3 年', months: 36 },
-  { key: '5y', label: '5 年', months: 60 },
+  { key: '1d', label: '1 日' },
+  { key: '1m', label: '1 個月' },
+  { key: '3m', label: '3 個月' },
+  { key: '6m', label: '6 個月' },
+  { key: 'ytd', label: '年初至今' },
+  { key: '1y', label: '1 年' },
+  { key: '3y', label: '3 年' },
+  { key: '5y', label: '5 年' },
 ] as const;
 
 export type RangeKey = (typeof RANGE_OPTIONS)[number]['key'];
+
+/** 預設看今天的變化 —— 打開首頁最常想知道的是「今天賺賠多少」 */
+export const DEFAULT_RANGE: RangeKey = '1d';
+
+/** 幾個月前 —— 只有固定月數的那幾個期間用得到 */
+const MONTHS_BACK: Partial<Record<RangeKey, number>> = {
+  '1m': 1,
+  '3m': 3,
+  '6m': 6,
+  '1y': 12,
+  '3y': 36,
+  '5y': 60,
+};
+
+/**
+ * 期間的起算日(含當天),YYYY-MM-DD。
+ *
+ * 「1 日」與「年初至今」不是固定月數,所以這裡不能只存一個月份數字:
+ * 前者是昨天,後者是今年的一月一號。
+ *
+ * 基準日由呼叫端傳台北時間的今天進來,不要在這裡讀系統時鐘 ——
+ * 伺服器跑在哪一區都要算出同樣的結果。
+ */
+export function rangeStartDate(key: RangeKey, today: string): string {
+  if (key === 'ytd') return `${today.slice(0, 4)}-01-01`;
+
+  const d = new Date(`${today}T00:00:00Z`);
+
+  if (key === '1d') {
+    d.setUTCDate(d.getUTCDate() - 1);
+  } else {
+    d.setUTCMonth(d.getUTCMonth() - (MONTHS_BACK[key] ?? 6));
+  }
+
+  return d.toISOString().slice(0, 10);
+}
+
+/** 把 ?range= 的值收成合法的期間,不認得就用預設 */
+export function parseRange(value: string | undefined): RangeKey {
+  return RANGE_OPTIONS.find((r) => r.key === value)?.key ?? DEFAULT_RANGE;
+}
