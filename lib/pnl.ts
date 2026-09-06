@@ -34,11 +34,13 @@ export interface DayTrades {
 
 export interface DailyPnl {
   date: string;
-  /** null 代表這天算不出來:沒有資料、沒有前一天可比,或那天是導入日 */
+  /** null 代表這天算不出來:沒有資料、沒有前一天可比、導入日,或休市 */
   pnl: number | null;
   percent: number | null;
   stock: number | null;
   trades: DayTrades | null;
+  /** 那天沒有開盤(國定假日)。未來的日子不算,那是還沒發生 */
+  closed: boolean;
 }
 
 /** 算盈虧與做標記時要看的交易欄位 */
@@ -97,18 +99,33 @@ export function groupTradesByDate(rows: TradeRow[]): Map<string, DayTrades> {
 export function computeDailyPnl(
   stockByDate: Map<string, number>,
   tradesByDate: Map<string, DayTrades>,
-  days: string[]
+  days: string[],
+  tradingDays?: Set<string>
 ): DailyPnl[] {
   return days.map((date) => {
     const stock = stockByDate.get(date);
     const prev = stockByDate.get(previousDay(date));
     const trades = tradesByDate.get(date) ?? null;
 
+    /*
+     * 有快照卻沒有任何收盤價 = 那天休市(國定假日)。
+     * 快照在休市日會沿用前一個交易日的價格,所以盈虧會算出 0 ——
+     * 那個 0 是假的,不該顯示成「今天持平」。
+     * 沒有快照的日子是未來,不是休市。
+     */
+    const closed =
+      stock !== undefined && tradingDays !== undefined && !tradingDays.has(date);
+
     const base = {
       date,
       stock: stock ?? null,
       trades,
+      closed,
     };
+
+    if (closed) {
+      return { ...base, pnl: null, percent: null };
+    }
 
     // 導入日:既沒賺也沒賠,只是把既有部位輸入進來
     if (trades && trades.initial > 0) {
@@ -256,22 +273,36 @@ export function daysInMonth(month: string): string[] {
   return days;
 }
 
+/** 這個月的平日(一～五),YYYY-MM-DD */
+export function weekdaysInMonth(month: string): string[] {
+  return daysInMonth(month).filter((d) => {
+    const dow = new Date(`${d}T00:00:00Z`).getUTCDay();
+    return dow >= 1 && dow <= 5;
+  });
+}
+
 /**
- * 排成月曆的格子:每列 7 天,週日起算(台灣習慣的 日一二三四五六)。
- * 首尾補 null 對齊星期。
+ * 排成月曆的格子:每列 5 天(一～五),首尾補 null 對齊星期。
+ *
+ * 週末不出現 —— 沒有開盤就沒有盈虧,留著只是佔掉三成七的版面,
+ * 而且快照沿用前一個交易日的價格會讓它們算出一個沒有意義的 0。
+ * 拿掉之後手機每格從 49px 變成 68px,字級不用再壓縮。
  */
 export function monthGrid(month: string): (string | null)[][] {
-  const days = daysInMonth(month);
-  const firstWeekday = new Date(`${days[0]}T00:00:00Z`).getUTCDay();
+  const weekdays = weekdaysInMonth(month);
+  if (weekdays.length === 0) return [];
+
+  // 週一為第 0 欄
+  const column = (d: string) => new Date(`${d}T00:00:00Z`).getUTCDay() - 1;
 
   const cells: (string | null)[] = [
-    ...Array.from({ length: firstWeekday }, () => null),
-    ...days,
+    ...Array.from({ length: column(weekdays[0]) }, () => null),
+    ...weekdays,
   ];
-  while (cells.length % 7 !== 0) cells.push(null);
+  while (cells.length % 5 !== 0) cells.push(null);
 
   const weeks: (string | null)[][] = [];
-  for (let i = 0; i < cells.length; i += 7) weeks.push(cells.slice(i, i + 7));
+  for (let i = 0; i < cells.length; i += 5) weeks.push(cells.slice(i, i + 5));
   return weeks;
 }
 
@@ -287,10 +318,13 @@ export function parseMonth(value: string | undefined, fallback: string): string 
   return value && /^\d{4}-(0[1-9]|1[0-2])$/.test(value) ? value : fallback;
 }
 
-/** 把 ?day= 的值收成 YYYY-MM-DD,格式不對或不屬於這個月就當成沒選 */
+/**
+ * 把 ?day= 的值收成 YYYY-MM-DD。
+ * 格式不對、不屬於這個月、或是週末(月曆上根本沒有那一格)都當成沒選。
+ */
 export function parseDay(value: string | undefined, month: string): string | undefined {
   if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return undefined;
-  return value.startsWith(`${month}-`) && daysInMonth(month).includes(value) ? value : undefined;
+  return weekdaysInMonth(month).includes(value) ? value : undefined;
 }
 
 /** 當月合計 —— 只加算得出來的那幾天 */

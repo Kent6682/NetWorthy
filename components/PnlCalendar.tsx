@@ -11,13 +11,16 @@ import { shiftMonth, type DailyPnl } from '@/lib/pnl';
  * 純 Server Component ——  月份切換靠連結,不需要任何 client JS。
  */
 
-const WEEKDAYS = ['日', '一', '二', '三', '四', '五', '六'];
+// 只排平日 —— 週末沒有開盤,留著只是佔版面
+const WEEKDAYS = ['一', '二', '三', '四', '五'];
 
 /** 滑鼠停留時的完整說明 —— 格子太小,細節放這裡 */
 function describeDay(date: string, row: DailyPnl | undefined): string {
   const parts: string[] = [date];
 
-  if (row?.trades && row.trades.initial > 0) {
+  if (row?.closed) {
+    parts.push('休市');
+  } else if (row?.trades && row.trades.initial > 0) {
     parts.push(`導入 ${row.trades.initial} 檔既有持股(當天不計盈虧)`);
   } else if (row?.pnl === null || row?.pnl === undefined) {
     parts.push('沒有資料可比');
@@ -139,7 +142,9 @@ export default function PnlCalendar({
 
               <span className="cal-date">{Number(date.slice(-2))}</span>
 
-              {imported ? (
+              {row?.closed ? (
+                <span className="cal-imported">休市</span>
+              ) : imported ? (
                 <span className="cal-imported">導入</span>
               ) : (
                 pnl !== null && (

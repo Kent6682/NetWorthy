@@ -14,6 +14,7 @@ import {
   parseDay,
   parseMonth,
   previousDay,
+  weekdaysInMonth,
   type DailyPnl,
 } from '@/lib/pnl';
 import {
@@ -22,6 +23,7 @@ import {
   getSnapshotRange,
   getStockTradesInRange,
   getStockTransactions,
+  getTradingDays,
   ownerIdsForScope,
   parseScope,
 } from '@/lib/queries';
@@ -56,20 +58,24 @@ export default async function CalendarPage({
   const selectedDay = parseDay(params.day, month);
   const ownerIds = ownerIdsForScope(scope, session.userId, session.members);
 
-  const days = daysInMonth(month);
-  const first = days[0];
-  const last = days[days.length - 1];
+  // 月曆只排平日,所以盈虧也只算平日。
+  // 週一的前一天是週日,而週日的快照沿用週五的價格,所以跨週末仍然算得對。
+  const days = weekdaysInMonth(month);
+  const monthDays = daysInMonth(month);
+  const first = monthDays[0];
+  const last = monthDays[monthDays.length - 1];
 
-  const [snapshots, trades] = await Promise.all([
+  const [snapshots, trades, tradingDays] = await Promise.all([
     // 多要前一天,才算得出當月第一天的盈虧
     getSnapshotRange(scope, session.userId, previousDay(first), last),
     getStockTradesInRange(ownerIds, first, last),
+    getTradingDays(first, last),
   ]);
 
   // 盈虧看的是股票市值,不是總資產 —— 詳見 lib/pnl.ts 的說明
   const stockByDate = new Map(snapshots.map((s) => [s.snapshot_date, Number(s.stock_twd)]));
 
-  const rows = computeDailyPnl(stockByDate, groupTradesByDate(trades), days);
+  const rows = computeDailyPnl(stockByDate, groupTradesByDate(trades), days, tradingDays);
   const byDate = new Map<string, DailyPnl>(rows.map((r) => [r.date, r]));
 
   // 選了某一天才去撈明細要用的資料

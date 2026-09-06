@@ -21,6 +21,7 @@ import {
   parseMonth,
   previousDay,
   shiftMonth,
+  weekdaysInMonth,
   type TradeRow,
 } from '../lib/pnl.ts';
 import type { StockTransaction } from '../lib/holdings.ts';
@@ -366,6 +367,7 @@ test('parseDay 只接受屬於這個月的合法日期', () => {
   assert.equal(parseDay('2026-09-04', '2026-09'), '2026-09-04');
   assert.equal(parseDay('2026-08-04', '2026-09'), undefined, '不是這個月');
   assert.equal(parseDay('2026-09-31', '2026-09'), undefined, '九月沒有 31 號');
+  assert.equal(parseDay('2026-09-05', '2026-09'), undefined, '週六在月曆上沒有那一格');
   assert.equal(parseDay('abc', '2026-09'), undefined);
   assert.equal(parseDay(undefined, '2026-09'), undefined);
 });
@@ -383,14 +385,63 @@ test('daysInMonth 天數正確', () => {
   assert.equal(daysInMonth('2026-01')[0], '2026-01-01');
 });
 
-test('monthGrid 每列 7 格,月初補空對齊星期', () => {
-  // 2026-09-01 是星期二 → 前面補 2 格
+test('weekdaysInMonth 只留一到五', () => {
+  const weekdays = weekdaysInMonth('2026-09');
+
+  assert.equal(weekdays.length, 22, '九月 30 天扣掉 8 天週末');
+  assert.equal(weekdays.includes('2026-09-05'), false, '9/5 是星期六');
+  assert.equal(weekdays.includes('2026-09-06'), false, '9/6 是星期日');
+  assert.equal(weekdays[0], '2026-09-01');
+});
+
+test('monthGrid 每列 5 格,月初補空對齊星期', () => {
+  // 2026-09-01 是星期二 → 週一那欄補 1 格
   const weeks = monthGrid('2026-09');
 
-  assert.ok(weeks.every((w) => w.length === 7), '每列都要剛好 7 格');
-  assert.deepEqual(weeks[0].slice(0, 2), [null, null]);
-  assert.equal(weeks[0][2], '2026-09-01');
-  assert.equal(weeks.flat().filter((d) => d !== null).length, 30);
+  assert.ok(weeks.every((w) => w.length === 5), '每列都要剛好 5 格');
+  assert.equal(weeks[0][0], null, '九月一號之前的週一不屬於這個月');
+  assert.equal(weeks[0][1], '2026-09-01');
+  assert.equal(weeks[0][4], '2026-09-04', '同一列的最後一格是星期五');
+  assert.equal(weeks[1][0], '2026-09-07', '下一列直接跳過週末');
+  assert.equal(weeks.flat().filter((d) => d !== null).length, 22);
+});
+
+test('休市日不給盈虧 —— 沿用價格算出來的 0 是假的', () => {
+  const stock = new Map([
+    ['2026-09-30', 1000000],
+    ['2026-10-01', 1000000], // 假日沿用前一交易日的價格
+    ['2026-10-02', 1010000],
+  ]);
+  // 10/1 沒有收盤價 = 那天休市
+  const tradingDays = new Set(['2026-09-30', '2026-10-02']);
+
+  const rows = computeDailyPnl(stock, noTrades, ['2026-10-01', '2026-10-02'], tradingDays);
+
+  assert.equal(rows[0].closed, true);
+  assert.equal(rows[0].pnl, null, '休市不該顯示成持平的 0');
+  assert.equal(rows[1].closed, false);
+  assert.equal(rows[1].pnl, 10000);
+});
+
+test('未來的日子是「還沒發生」,不是休市', () => {
+  // 沒有快照 = 還沒到那天
+  const rows = computeDailyPnl(new Map(), noTrades, ['2026-12-25'], new Set());
+
+  assert.equal(rows[0].closed, false, '沒有快照就不該標成休市');
+  assert.equal(rows[0].pnl, null);
+});
+
+test('沒有傳開盤日清單時不做休市判斷', () => {
+  const rows = computeDailyPnl(
+    new Map([
+      ['2026-09-01', 1000000],
+      ['2026-09-02', 1000000],
+    ]),
+    noTrades,
+    ['2026-09-02']
+  );
+  assert.equal(rows[0].closed, false);
+  assert.equal(rows[0].pnl, 0);
 });
 
 test('shiftMonth 跨年正確', () => {

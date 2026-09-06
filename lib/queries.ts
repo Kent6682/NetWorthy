@@ -189,6 +189,25 @@ export async function getPricesInRange(
   }));
 }
 
+/**
+ * 日曆用:區間內真正有開盤的日子。
+ *
+ * 判斷依據是 stock_price_history 有沒有那天的收盤價 —— 精確,而且不用維護
+ * 一份國定假日表。快照在休市日會沿用前一個交易日的價格,盈虧會算出一個
+ * 沒有意義的 0,要靠這個把它們標成「休市」。
+ */
+export async function getTradingDays(from: string, to: string): Promise<Set<string>> {
+  const supabase = await createClient();
+
+  const { data } = await supabase
+    .from('stock_price_history')
+    .select('price_date')
+    .gte('price_date', from)
+    .lte('price_date', to);
+
+  return new Set((data ?? []).map((r) => r.price_date as string));
+}
+
 /** 首頁趨勢線資料:個人視角取自己那列,全家視角取 owner_id 為 null 的合計列 */
 export async function getSnapshots(
   scope: Scope,

@@ -404,9 +404,10 @@ select.field {
    每日盈虧月曆
    ============================================================================ */
 
+/* 五欄:一～五。週末沒有開盤,不排進來 */
 .cal-grid {
   display: grid;
-  grid-template-columns: repeat(7, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 1px;
   background: var(--divider);
   border: 1px solid var(--hairline-ring);
@@ -422,14 +423,11 @@ select.field {
   color: var(--text-muted);
 }
 
-/*
- * 手機一格只有約 49px 寬,要塞下日期、金額、漲跌幅三行。
- * 內距收到 2px、字級縮一級才放得下六個字的金額(例如 +34.5萬)。
- */
+/* 五欄之後手機一格約 68px,放得下日期、金額、漲跌幅三行,不用再壓字級 */
 .cal-cell {
   position: relative;
   min-height: 64px;
-  padding: 5px 2px;
+  padding: 5px 4px;
   background: var(--surface-1);
   display: flex;
   flex-direction: column;
@@ -485,31 +483,20 @@ a.cal-cell:focus-visible {
 }
 
 .cal-amount {
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
-  line-height: 1.2;
+  line-height: 1.25;
   text-align: center;
   white-space: nowrap;
 }
 
 .cal-percent {
-  font-size: 0.625rem;
+  font-size: 0.6875rem;
   font-variant-numeric: tabular-nums;
   color: var(--text-secondary);
   line-height: 1.2;
   white-space: nowrap;
-}
-
-@media (min-width: 640px) {
-  .cal-amount {
-    font-size: 0.75rem;
-    line-height: 1.25;
-  }
-
-  .cal-percent {
-    font-size: 0.6875rem;
-  }
 }
 
 /*
