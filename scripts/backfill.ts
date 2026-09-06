@@ -21,8 +21,13 @@ import { fetchTwHistory, fetchUsHistory, fetchUsdTwdHistory } from './providers.
 
 const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Taipei' });
 
-/** 證交所對連續請求會擋,月檔之間隔一下 */
-const TWSE_GAP_MS = 1200;
+/**
+ * 月檔之間的間隔。
+ *
+ * 證交所大約是每 5 秒 3 次,超過就擋。2 秒等於每 5 秒 2.5 次,留一點餘裕 ——
+ * 被擋的月份只會印一行警告然後繼續,結果是安靜地少掉那段資料,寧可慢一點。
+ */
+const TWSE_GAP_MS = 2000;
 
 function log(msg: string) {
   console.log(msg);
@@ -97,17 +102,31 @@ async function main() {
         ? await fetchTwHistory(s.symbol, months, () => sleep(TWSE_GAP_MS))
         : await fetchUsHistory(s.symbol, from, today);
 
-    if (raw.size === 0) {
-      console.warn(`  ${s.symbol}:抓不到任何歷史報價,這一檔的回填期間會用成本價估算`);
-    } else {
-      log(`  ${s.symbol}:${raw.size} 個交易日`);
-    }
-
     for (const [date, close] of raw) {
       priceRows.push({ symbol: s.symbol, price_date: date, close_price: close });
     }
+
     // 週末與假日沿用最近一次收盤價 —— 那正是那幾天的實際市值
-    pricesBySymbol.set(s.symbol, carryForward(raw, days));
+    const filled = carryForward(raw, days);
+    pricesBySymbol.set(s.symbol, filled);
+
+    /*
+     * 報出涵蓋率,而不是只報抓到幾個交易日。
+     *
+     * 來源被擋或某個月落空時,那幾天會安靜地退回成本價估算 —— 整支腳本
+     * 仍然「成功」,只是曲線有一段是平的。把缺口攤開來才看得見。
+     */
+    const missing = days.length - filled.size;
+    if (raw.size === 0) {
+      console.warn(`  ${s.symbol}:完全抓不到歷史報價,整段回填期間都會用成本價估算`);
+    } else if (missing > 0) {
+      console.warn(
+        `  ${s.symbol}:${raw.size} 個交易日,但有 ${missing} 天沒有價格` +
+          `(多半是第一個收盤日之前),那幾天用成本價估算`
+      );
+    } else {
+      log(`  ${s.symbol}:${raw.size} 個交易日,${days.length} 天全部有價格`);
+    }
   }
 
   if (priceRows.length > 0) {
