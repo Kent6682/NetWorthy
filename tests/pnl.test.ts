@@ -10,16 +10,20 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  buildPriceLookup,
   computeDailyPnl,
+  computeHoldingPnl,
   daysInMonth,
   groupTradesByDate,
   monthGrid,
   monthTotal,
+  parseDay,
   parseMonth,
   previousDay,
   shiftMonth,
   type TradeRow,
 } from '../lib/pnl.ts';
+import type { StockTransaction } from '../lib/holdings.ts';
 
 function trade(partial: Partial<TradeRow>): TradeRow {
   return {
@@ -188,6 +192,151 @@ test('當月合計只加算得出來的日子', () => {
 
   // 9/2 沒有快照 → null;9/3 的前一天也沒有 → null
   assert.deepEqual(monthTotal(rows), { pnl: 10000, days: 1 });
+});
+
+// --- 單日明細 ------------------------------------------------------------
+
+function stockTxn(partial: Partial<StockTransaction>): StockTransaction {
+  return {
+    id: partial.id ?? 't1',
+    owner_id: 'kent',
+    symbol: '2330',
+    type: 'initial',
+    shares: 1000,
+    price: 500,
+    fee: 0,
+    transaction_date: '2026-09-01',
+    created_at: '2026-09-01T00:00:00Z',
+    ...partial,
+  };
+}
+
+test('buildPriceLookup:查不到當天就沿用最近一次收盤價', () => {
+  const at = buildPriceLookup([
+    { symbol: '2330', price_date: '2026-09-04', close_price: 610 },
+    { symbol: '2330', price_date: '2026-09-01', close_price: 600 },
+  ]);
+
+  assert.equal(at('2330', '2026-09-04'), 610);
+  assert.equal(at('2330', '2026-09-06'), 610, '週日沿用週五');
+  assert.equal(at('2330', '2026-09-02'), 600, '沒開盤沿用前一個交易日');
+  assert.equal(at('2330', '2026-08-31'), null, '第一筆之前不要往回猜');
+  assert.equal(at('9999', '2026-09-04'), null, '沒有這檔');
+});
+
+test('每檔明細加總 = 日曆格子的當日盈虧', () => {
+  /*
+   * 這是點進去看明細時最基本的信任:兩個數字必須一致。
+   * 兩邊都用 lib/holdings.ts 算持股、同樣的缺價退回成本價、同樣的交易扣除。
+   */
+  const txns = [
+    stockTxn({ id: 'a', symbol: '2330', shares: 1000, price: 500 }),
+    stockTxn({ id: 'b', symbol: '0050', shares: 2000, price: 150 }),
+  ];
+  const at = buildPriceLookup([
+    { symbol: '2330', price_date: '2026-09-02', close_price: 500 },
+    { symbol: '2330', price_date: '2026-09-03', close_price: 520 },
+    { symbol: '0050', price_date: '2026-09-02', close_price: 150 },
+    { symbol: '0050', price_date: '2026-09-03', close_price: 148 },
+  ]);
+
+  const holdings = computeHoldingPnl(txns, '2026-09-03', at);
+  const sum = holdings.reduce((s, h) => s + (h.pnl ?? 0), 0);
+
+  // 用同一組市值餵給日曆的公式
+  const stock = new Map([
+    ['2026-09-02', 1000 * 500 + 2000 * 150],
+    ['2026-09-03', 1000 * 520 + 2000 * 148],
+  ]);
+  const dayPnl = computeDailyPnl(stock, noTrades, ['2026-09-03'])[0].pnl;
+
+  assert.equal(sum, 16000, '2330 +20,000、0050 −4,000');
+  assert.equal(sum, dayPnl, '明細加總必須等於日曆格子');
+});
+
+test('明細依影響大小排序,買賣當天扣掉部位變動', () => {
+  const txns = [
+    stockTxn({ id: 'a', symbol: '2330', shares: 1000, price: 500 }),
+    stockTxn({
+      id: 'b',
+      symbol: '2330',
+      type: 'buy',
+      shares: 1000,
+      price: 510,
+      fee: 700,
+      transaction_date: '2026-09-03',
+      created_at: '2026-09-03T00:00:00Z',
+    }),
+    stockTxn({ id: 'c', symbol: '0050', shares: 2000, price: 150 }),
+  ];
+  const at = buildPriceLookup([
+    { symbol: '2330', price_date: '2026-09-02', close_price: 500 },
+    { symbol: '2330', price_date: '2026-09-03', close_price: 520 },
+    { symbol: '0050', price_date: '2026-09-02', close_price: 150 },
+    { symbol: '0050', price_date: '2026-09-03', close_price: 149 },
+  ]);
+
+  const rows = computeHoldingPnl(txns, '2026-09-03', at);
+  const tsmc = rows.find((r) => r.symbol === '2330')!;
+
+  // 原有 1000 股漲 20 = +20,000;新買的 1000 股從 510 收在 520 = +10,000;手續費 −700
+  assert.equal(tsmc.pnl, 29300);
+  assert.equal(tsmc.shares, 2000);
+  assert.equal(tsmc.prevShares, 1000);
+  assert.equal(tsmc.trades.length, 1);
+  assert.equal(rows[0].symbol, '2330', '影響最大的排前面');
+});
+
+test('導入當天那一檔不給盈虧', () => {
+  const txns = [stockTxn({ symbol: '2330', transaction_date: '2026-09-03' })];
+  const at = buildPriceLookup([{ symbol: '2330', price_date: '2026-09-03', close_price: 520 }]);
+
+  const row = computeHoldingPnl(txns, '2026-09-03', at)[0];
+  assert.equal(row.pnl, null, '導入不是賺 52 萬');
+  assert.equal(row.shares, 1000);
+});
+
+test('當天賣光的標的仍要列出來(它那天有貢獻盈虧)', () => {
+  const txns = [
+    stockTxn({ id: 'a', symbol: '2330', shares: 1000, price: 500 }),
+    stockTxn({
+      id: 'b',
+      symbol: '2330',
+      type: 'sell',
+      shares: 1000,
+      price: 520,
+      fee: 1500,
+      transaction_date: '2026-09-03',
+      created_at: '2026-09-03T00:00:00Z',
+    }),
+  ];
+  const at = buildPriceLookup([
+    { symbol: '2330', price_date: '2026-09-02', close_price: 500 },
+    { symbol: '2330', price_date: '2026-09-03', close_price: 520 },
+  ]);
+
+  const rows = computeHoldingPnl(txns, '2026-09-03', at);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].shares, 0, '賣光了');
+  assert.equal(rows[0].prevShares, 1000);
+  // 0 − 500,000 − (−(520,000 − 1,500)) = 18,500
+  assert.equal(rows[0].pnl, 18500);
+});
+
+test('沒有持股過的標的不列', () => {
+  const txns = [
+    stockTxn({ id: 'a', symbol: '2330', transaction_date: '2026-09-10' }), // 之後才買
+  ];
+  const at = buildPriceLookup([]);
+  assert.deepEqual(computeHoldingPnl(txns, '2026-09-03', at), []);
+});
+
+test('parseDay 只接受屬於這個月的合法日期', () => {
+  assert.equal(parseDay('2026-09-04', '2026-09'), '2026-09-04');
+  assert.equal(parseDay('2026-08-04', '2026-09'), undefined, '不是這個月');
+  assert.equal(parseDay('2026-09-31', '2026-09'), undefined, '九月沒有 31 號');
+  assert.equal(parseDay('abc', '2026-09'), undefined);
+  assert.equal(parseDay(undefined, '2026-09'), undefined);
 });
 
 test('previousDay 跨月跨年正確', () => {

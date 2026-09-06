@@ -448,6 +448,26 @@ select.field {
   background: var(--page-plane);
 }
 
+/* 格子是連結,點下去看當日每檔的明細 */
+a.cal-cell {
+  color: inherit;
+  text-decoration: none;
+  transition: box-shadow 0.12s;
+}
+
+a.cal-cell:hover {
+  box-shadow: inset 0 0 0 1px var(--baseline);
+}
+
+a.cal-cell:focus-visible {
+  outline: 2px solid var(--series-1);
+  outline-offset: -2px;
+}
+
+.cal-cell[data-selected='true'] {
+  box-shadow: inset 0 0 0 2px var(--text-primary);
+}
+
 .cal-date {
   font-size: 0.6875rem;
   font-variant-numeric: tabular-nums;

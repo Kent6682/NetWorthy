@@ -54,6 +54,7 @@ export default function PnlCalendar({
   today,
   scope,
   total,
+  selectedDay,
 }: {
   month: string;
   weeks: (string | null)[][];
@@ -61,9 +62,12 @@ export default function PnlCalendar({
   today: string;
   scope: string;
   total: { pnl: number; days: number };
+  selectedDay?: string;
 }) {
   const [year, mon] = month.split('-');
-  const href = (m: string) => `/calendar?month=${m}${scope === 'family' ? '&scope=family' : ''}`;
+  const tail = scope === 'family' ? '&scope=family' : '';
+  const href = (m: string) => `/calendar?month=${m}${tail}`;
+  const dayHref = (d: string) => `/calendar?month=${month}&day=${d}${tail}#day-detail`;
 
   // 深淺是相對於當月最大波動 —— 平穩的月份不會整片死白,劇烈的月份也不會整片濃色
   const maxAbs = Math.max(
@@ -114,10 +118,13 @@ export default function PnlCalendar({
           const intensity = pnl === null ? 0 : Math.abs(pnl) / maxAbs;
 
           return (
-            <div
+            <Link
               key={date}
+              href={dayHref(date)}
+              scroll={false}
               className="cal-cell"
               data-today={date === today}
+              data-selected={date === selectedDay}
               data-tone={tone}
               style={{ '--cal-intensity': intensity } as React.CSSProperties}
               title={describeDay(date, row)}
@@ -148,7 +155,7 @@ export default function PnlCalendar({
                   </>
                 )
               )}
-            </div>
+            </Link>
           );
         })}
       </div>

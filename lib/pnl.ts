@@ -18,6 +18,8 @@
  * 錢一直都在,算進去只會產生假的尖峰)。
  */
 
+import { calculateHoldings, type StockTransaction } from './holdings.ts';
+
 export interface DayTrades {
   /** 當天導入了幾檔期初持股 */
   initial: number;
@@ -128,6 +130,112 @@ export function computeDailyPnl(
   });
 }
 
+/**
+ * 把收盤價列表變成「查某檔在某天的價格」的函式。
+ *
+ * 收盤價只有交易日才有,所以查不到當天時往回找最近一次 —— 週末與假日
+ * 的市值就是沿用前一個交易日的收盤價,這跟快照的算法一致。
+ */
+export function buildPriceLookup(
+  rows: { symbol: string; price_date: string; close_price: number }[]
+): (symbol: string, date: string) => number | null {
+  const bySymbol = new Map<string, { date: string; price: number }[]>();
+
+  for (const r of rows) {
+    const list = bySymbol.get(r.symbol) ?? [];
+    list.push({ date: r.price_date, price: r.close_price });
+    bySymbol.set(r.symbol, list);
+  }
+  for (const list of bySymbol.values()) list.sort((a, b) => a.date.localeCompare(b.date));
+
+  return (symbol, date) => {
+    const list = bySymbol.get(symbol);
+    if (!list) return null;
+
+    let found: number | null = null;
+    for (const row of list) {
+      if (row.date > date) break;
+      found = row.price;
+    }
+    return found;
+  };
+}
+
+/** 單日明細裡的一檔 */
+export interface HoldingPnl {
+  symbol: string;
+  /** 當日持股;賣光的那天會是 0,但仍然列出來(它那天有貢獻盈虧) */
+  shares: number;
+  prevShares: number;
+  price: number;
+  prevPrice: number;
+  /** null 代表這檔當天是導入既有部位,不計盈虧 */
+  pnl: number | null;
+  trades: TradeRow[];
+}
+
+/**
+ * 把某一天的盈虧拆成每一檔。
+ *
+ * 每檔盈虧 = 當日市值 − 前日市值 − 當天買賣造成的部位變動
+ *
+ * 加總會精確等於 computeDailyPnl() 給的當日盈虧 —— 兩邊用的是同一套規則:
+ * 同樣的持股計算(lib/holdings.ts)、同樣的缺價退回成本價、同樣的交易扣除。
+ * 估價方式跟快照不一致的話,點進去的明細就會跟日曆格子對不起來。
+ */
+export function computeHoldingPnl(
+  txns: StockTransaction[],
+  date: string,
+  priceOn: (symbol: string, date: string) => number | null
+): HoldingPnl[] {
+  const prev = previousDay(date);
+
+  const holdNow = new Map(
+    calculateHoldings(txns.filter((t) => t.transaction_date <= date)).map((h) => [h.symbol, h])
+  );
+  const holdPrev = new Map(
+    calculateHoldings(txns.filter((t) => t.transaction_date <= prev)).map((h) => [h.symbol, h])
+  );
+  const todayTrades = txns.filter((t) => t.transaction_date === date);
+
+  const rows: HoldingPnl[] = [];
+
+  for (const symbol of new Set([...holdNow.keys(), ...holdPrev.keys()])) {
+    const now = holdNow.get(symbol);
+    const before = holdPrev.get(symbol);
+    const shares = now?.shares ?? 0;
+    const prevShares = before?.shares ?? 0;
+    if (shares <= 0 && prevShares <= 0) continue;
+
+    // 缺報價時退回成本價,跟快照的規則一致
+    const price = priceOn(symbol, date) ?? now?.avgCost ?? 0;
+    const prevPrice = priceOn(symbol, prev) ?? before?.avgCost ?? 0;
+
+    const trades = todayTrades.filter((t) => t.symbol === symbol) as TradeRow[];
+
+    let adjustment = 0;
+    let imported = false;
+    for (const t of trades) {
+      if (t.type === 'initial') imported = true;
+      else if (t.type === 'buy') adjustment += t.shares * t.price + t.fee;
+      else adjustment -= t.shares * t.price - t.fee;
+    }
+
+    rows.push({
+      symbol,
+      shares,
+      prevShares,
+      price,
+      prevPrice,
+      pnl: imported ? null : shares * price - prevShares * prevPrice - adjustment,
+      trades,
+    });
+  }
+
+  // 影響最大的排前面 —— 打開明細通常是想知道「今天是誰害的」
+  return rows.sort((a, b) => Math.abs(b.pnl ?? 0) - Math.abs(a.pnl ?? 0));
+}
+
 /** 這個月的每一天,YYYY-MM-DD */
 export function daysInMonth(month: string): string[] {
   const [y, m] = month.split('-').map(Number);
@@ -170,6 +278,12 @@ export function shiftMonth(month: string, delta: number): string {
 /** 把 ?month= 的值收成 YYYY-MM,不合法就退回 fallback */
 export function parseMonth(value: string | undefined, fallback: string): string {
   return value && /^\d{4}-(0[1-9]|1[0-2])$/.test(value) ? value : fallback;
+}
+
+/** 把 ?day= 的值收成 YYYY-MM-DD,格式不對或不屬於這個月就當成沒選 */
+export function parseDay(value: string | undefined, month: string): string | undefined {
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return undefined;
+  return value.startsWith(`${month}-`) && daysInMonth(month).includes(value) ? value : undefined;
 }
 
 /** 當月合計 —— 只加算得出來的那幾天 */

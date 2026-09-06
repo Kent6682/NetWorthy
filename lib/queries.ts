@@ -163,6 +163,32 @@ export async function getStockTradesInRange(
   })) as TradeRow[];
 }
 
+/**
+ * 日曆單日明細用:區間內的歷史收盤價。
+ *
+ * 要往前多抓一段,因為收盤價只有交易日才有 —— 遇到連假,前一日的價格可能
+ * 要往回找好幾天。呼叫端用 buildPriceLookup() 處理沿用。
+ */
+export async function getPricesInRange(
+  from: string,
+  to: string
+): Promise<{ symbol: string; price_date: string; close_price: number }[]> {
+  const supabase = await createClient();
+
+  const { data } = await supabase
+    .from('stock_price_history')
+    .select('symbol, price_date, close_price')
+    .gte('price_date', from)
+    .lte('price_date', to)
+    .order('price_date');
+
+  return (data ?? []).map((p) => ({
+    symbol: p.symbol as string,
+    price_date: p.price_date as string,
+    close_price: Number(p.close_price),
+  }));
+}
+
 /** 首頁趨勢線資料:個人視角取自己那列,全家視角取 owner_id 為 null 的合計列 */
 export async function getSnapshots(
   scope: Scope,
