@@ -10,6 +10,7 @@ import assert from 'node:assert/strict';
 import {
   DEFAULT_RANGE,
   parseRange,
+  pickLastTradingDays,
   rangeStartDate,
   RANGE_OPTIONS,
 } from '../lib/portfolio.ts';
@@ -21,10 +22,32 @@ test('期間的順序:1 日在最前,年初至今在 1 年之前', () => {
   );
 });
 
-test('預設是 1 日', () => {
-  assert.equal(DEFAULT_RANGE, '1d');
-  assert.equal(parseRange(undefined), '1d');
-  assert.equal(parseRange('不認得的值'), '1d');
+test('預設是年初至今', () => {
+  assert.equal(DEFAULT_RANGE, 'ytd');
+  assert.equal(parseRange(undefined), 'ytd');
+  assert.equal(parseRange('不認得的值'), 'ytd');
+});
+
+test('pickLastTradingDays 挑最近的交易日,由舊到新', () => {
+  // 9/5、9/6 是週末,沒有收盤價
+  const days = new Set(['2026-09-02', '2026-09-03', '2026-09-04', '2026-09-07']);
+
+  assert.deepEqual(pickLastTradingDays(days, '2026-09-07', 2), ['2026-09-04', '2026-09-07']);
+  assert.deepEqual(
+    pickLastTradingDays(days, '2026-09-06', 2),
+    ['2026-09-03', '2026-09-04'],
+    '週日往回找,拿到週四與週五'
+  );
+});
+
+test('pickLastTradingDays 不會挑到未來的日子', () => {
+  const days = new Set(['2026-09-04', '2026-09-07', '2026-09-08']);
+  assert.deepEqual(pickLastTradingDays(days, '2026-09-07', 2), ['2026-09-04', '2026-09-07']);
+});
+
+test('pickLastTradingDays 資料不足時回傳現有的,不補假日期', () => {
+  assert.deepEqual(pickLastTradingDays(new Set(['2026-09-04']), '2026-09-07', 2), ['2026-09-04']);
+  assert.deepEqual(pickLastTradingDays(new Set(), '2026-09-07', 2), []);
 });
 
 test('parseRange 認得每一個合法選項', () => {

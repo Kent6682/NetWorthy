@@ -162,8 +162,25 @@ export const RANGE_OPTIONS = [
 
 export type RangeKey = (typeof RANGE_OPTIONS)[number]['key'];
 
-/** 預設看今天的變化 —— 打開首頁最常想知道的是「今天賺賠多少」 */
-export const DEFAULT_RANGE: RangeKey = '1d';
+export const DEFAULT_RANGE: RangeKey = 'ytd';
+
+/**
+ * 從有開盤的日子裡挑出最靠近 upTo(含)的前幾天,由舊到新。
+ *
+ * 「1 日」要比的是最近兩個交易日,不是日曆上的昨天與今天 ——
+ * 週一的前一天是週日,沒有開盤,快照沿用週五的價格,拿來比會得到 0。
+ * 國定假日同理,而且不能靠星期幾判斷,得看那天到底有沒有收盤價。
+ */
+export function pickLastTradingDays(
+  tradingDays: Iterable<string>,
+  upTo: string,
+  count: number
+): string[] {
+  return [...tradingDays]
+    .filter((d) => d <= upTo)
+    .sort()
+    .slice(-count);
+}
 
 /** 幾個月前 —— 只有固定月數的那幾個期間用得到 */
 const MONTHS_BACK: Partial<Record<RangeKey, number>> = {

@@ -8,6 +8,7 @@ import {
   buildValuedHoldings,
   computeTotals,
   parseRange,
+  pickLastTradingDays,
   rangeStartDate,
   RANGE_OPTIONS,
 } from '@/lib/portfolio';
@@ -18,6 +19,7 @@ import {
   getSnapshots,
   getStocks,
   getStockTransactions,
+  getTradingDays,
   getUsdToTwd,
   ownerIdsForScope,
   parseScope,
@@ -70,7 +72,23 @@ export default async function DashboardPage({
   if (!session) return null;
 
   const ownerIds = ownerIdsForScope(scope, session.userId, session.members);
-  const since = rangeStartDate(rangeKey, todayInTaipei());
+  const today = todayInTaipei();
+
+  /*
+   * 「1 日」比的是最近兩個交易日,不是日曆上的昨天與今天。
+   *
+   * 週一的前一天是週日,沒有開盤 —— 快照沿用週五的價格,拿來比會得到 0。
+   * 哪幾天有開盤看 stock_price_history 有沒有收盤價,國定假日才判斷得出來,
+   * 不能靠星期幾。
+   */
+  let since = rangeStartDate(rangeKey, today);
+  let tradingDays: Set<string> | null = null;
+
+  if (rangeKey === '1d') {
+    tradingDays = await getTradingDays(rangeStartDate('1m', today), today);
+    const lastTwo = pickLastTradingDays(tradingDays, today, 2);
+    if (lastTwo.length === 2) since = lastTwo[0];
+  }
 
   const [{ rate: usdToTwd, date: fxDate }, balances, transactions, stocks, prices, snapshots] =
     await Promise.all([
@@ -99,8 +117,7 @@ export default async function DashboardPage({
    * 排程還沒跑到今天之前,兩個數字會對不起來(尤其今天剛記了一筆大額進出時)。
    * 所以最後補上一個「今天」的即時點,讓曲線收在跟主數字相同的位置。
    */
-  const today = todayInTaipei();
-  const trendData =
+  const withToday =
     snapshots.length > 0 && snapshots[snapshots.length - 1].snapshot_date < today
       ? [
           ...snapshots,
@@ -113,6 +130,18 @@ export default async function DashboardPage({
           },
         ]
       : snapshots;
+
+  /*
+   * 「1 日」只留那兩個交易日。中間的週末與假日快照是沿用前一個交易日的價格
+   * 算出來的,留著只會在圖上多出幾個持平的點。
+   *
+   * 排程還沒跑到今天時,今天不在交易日清單裡,會被濾掉 —— 那時候比的是
+   * 最近一次真正收盤的變化,而不是拿還沒有報價的今天去比。
+   */
+  const trendData =
+    rangeKey === '1d' && tradingDays
+      ? withToday.filter((d) => tradingDays.has(d.snapshot_date)).slice(-2)
+      : withToday;
 
   // 期間內的變化,放在主數字底下
   const periodChange =
