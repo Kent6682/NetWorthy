@@ -11,6 +11,7 @@
 import { pathToFileURL } from 'node:url';
 import { db, explainWriteError } from './db.ts';
 import { computeSnapshotRows } from '../lib/snapshots.ts';
+import { buildPriceLookup, previousDay } from '../lib/pnl.ts';
 import { loadSnapshotSources, replaceSnapshots } from './snapshot-data.ts';
 import {
   fetchTpexCloses,
@@ -187,6 +188,26 @@ async function syncFx(): Promise<number> {
 // 4. 重算每日總資產快照
 // ---------------------------------------------------------------------------
 
+/** 往前多抓一段報價才找得到前一個交易日 —— 農曆年可能連休九天 */
+const PRICE_LOOKBACK_DAYS = 30;
+
+function shiftDays(date: string, delta: number): string {
+  const d = new Date(`${date}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + delta);
+  return d.toISOString().slice(0, 10);
+}
+
+/**
+ * 重算今天,順便重算昨天。
+ *
+ * 為什麼要多算昨天:證交所常常在 14:30 這班排程跑完之後才公布當天收盤價。
+ * 那種時候今天的快照會用前一個交易日的價格算出來,而隔天早上那班的 today
+ * 已經變成新的一天,不會回頭修正 —— 那一天的快照就永久停在錯的價格上,
+ * 除非手動跑回填。多算一天成本幾乎是零,卻能自動補上這種延遲。
+ *
+ * 也因為要重算過去的日子,這裡不能用 latest_stock_prices(每檔只有最新一天),
+ * 必須依日期查價。
+ */
 async function rebuildSnapshots(usdToTwd: number): Promise<number> {
   const sources = await loadSnapshotSources();
   if (!sources) {
@@ -194,21 +215,59 @@ async function rebuildSnapshots(usdToTwd: number): Promise<number> {
     return 0;
   }
 
-  const { data: latest } = await db()
-    .from('latest_stock_prices')
-    .select('symbol, close_price');
-  const priceBySymbol = new Map((latest ?? []).map((p) => [p.symbol, Number(p.close_price)]));
+  const days = [previousDay(today), today];
+  const since = shiftDays(days[0], -PRICE_LOOKBACK_DAYS);
 
-  const rows = computeSnapshotRows(
-    sources,
-    today,
-    (symbol) => priceBySymbol.get(symbol) ?? null,
-    usdToTwd
+  const { data: priceRows } = await db()
+    .from('stock_price_history')
+    .select('symbol, price_date, close_price')
+    .gte('price_date', since)
+    .lte('price_date', today);
+
+  const priceAt = buildPriceLookup(
+    (priceRows ?? []).map((p) => ({
+      symbol: p.symbol as string,
+      price_date: p.price_date as string,
+      close_price: Number(p.close_price),
+    }))
   );
 
-  await replaceSnapshots([today], rows);
+  /*
+   * 匯率也要依日期查 —— 昨天該用昨天的匯率。
+   * buildPriceLookup 就是「取某個序列在某天(含)以前的最後一個值」,
+   * 把幣別當成 symbol 就能直接沿用,不必再寫一份同樣的邏輯。
+   */
+  const { data: fxRows } = await db()
+    .from('fx_rates')
+    .select('rate_date, rate')
+    .eq('from_currency', 'USD')
+    .eq('to_currency', 'TWD')
+    .gte('rate_date', since)
+    .lte('rate_date', today);
 
-  log(`快照:寫入 ${rows.length} 列(${sources.profiles.length} 位成員 + 家庭合計)`);
+  const fxAt = buildPriceLookup(
+    (fxRows ?? []).map((r) => ({
+      symbol: 'USD',
+      price_date: r.rate_date as string,
+      close_price: Number(r.rate),
+    }))
+  );
+
+  const rows = days.flatMap((day) =>
+    computeSnapshotRows(
+      sources,
+      day,
+      (symbol) => priceAt(symbol, day),
+      fxAt('USD', day) ?? usdToTwd
+    )
+  );
+
+  await replaceSnapshots(days, rows);
+
+  log(
+    `快照:重算 ${days[0]} 與 ${days[1]},寫入 ${rows.length} 列` +
+      `(${sources.profiles.length} 位成員 + 家庭合計)`
+  );
   return rows.length;
 }
 
