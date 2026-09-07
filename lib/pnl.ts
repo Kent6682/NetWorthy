@@ -34,13 +34,15 @@ export interface DayTrades {
 
 export interface DailyPnl {
   date: string;
-  /** null 代表這天算不出來:沒有資料、沒有前一天可比、導入日,或休市 */
+  /** null 代表這天算不出來:沒有資料、沒有前一天可比、導入日、休市,或報價還沒到 */
   pnl: number | null;
   percent: number | null;
   stock: number | null;
   trades: DayTrades | null;
-  /** 那天沒有開盤(國定假日)。未來的日子不算,那是還沒發生 */
+  /** 那天沒有開盤(週末、國定假日) */
   closed: boolean;
+  /** 那天有開盤,但收盤價還沒抓到 —— 證交所通常下午才公布,排程可能跑在它之前 */
+  pending: boolean;
 }
 
 /** 算盈虧與做標記時要看的交易欄位 */
@@ -102,28 +104,47 @@ export function computeDailyPnl(
   days: string[],
   tradingDays?: Set<string>
 ): DailyPnl[] {
+  /*
+   * 已知報價涵蓋到哪一天。這條界線把「休市」跟「報價還沒到」分開:
+   *
+   *   date <= 這一天且沒有收盤價  →  國定假日,真的休市
+   *   date >  這一天              →  收盤價還沒抓到(證交所通常下午才公布,
+   *                                  排程可能跑在它之前),不是休市
+   *
+   * 少了這條界線,今天就會被誤標成休市 —— 星期一下午排程跑完但證交所還沒
+   * 公布,那天有快照卻沒股價,看起來跟國定假日一模一樣。
+   */
+  const latestTradingDay =
+    tradingDays === undefined ? undefined : [...tradingDays].sort().at(-1);
+
   return days.map((date) => {
     const stock = stockByDate.get(date);
     const prev = stockByDate.get(previousDay(date));
     const trades = tradesByDate.get(date) ?? null;
 
     /*
-     * 有快照卻沒有任何收盤價 = 那天休市(國定假日)。
-     * 快照在休市日會沿用前一個交易日的價格,所以盈虧會算出 0 ——
-     * 那個 0 是假的,不該顯示成「今天持平」。
-     * 沒有快照的日子是未來,不是休市。
+     * 快照在沒有新報價的日子會沿用前一個交易日的價格,所以盈虧會算出 0。
+     * 那個 0 是假的,不該顯示成「今天持平」—— 下面兩種情況都要擋掉。
+     * 沒有快照的日子是未來,兩種都不是。
      */
+    const hasSnapshot = stock !== undefined;
     const closed =
-      stock !== undefined && tradingDays !== undefined && !tradingDays.has(date);
+      hasSnapshot &&
+      latestTradingDay !== undefined &&
+      date <= latestTradingDay &&
+      !tradingDays!.has(date);
+    const pending =
+      hasSnapshot && latestTradingDay !== undefined && date > latestTradingDay;
 
     const base = {
       date,
       stock: stock ?? null,
       trades,
       closed,
+      pending,
     };
 
-    if (closed) {
+    if (closed || pending) {
       return { ...base, pnl: null, percent: null };
     }
 

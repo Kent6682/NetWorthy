@@ -20,6 +20,8 @@ function describeDay(date: string, row: DailyPnl | undefined): string {
 
   if (row?.closed) {
     parts.push('休市');
+  } else if (row?.pending) {
+    parts.push('收盤價還沒抓到,等下一次同步');
   } else if (row?.trades && row.trades.initial > 0) {
     parts.push(`導入 ${row.trades.initial} 檔既有持股(當天不計盈虧)`);
   } else if (row?.pnl === null || row?.pnl === undefined) {
@@ -144,6 +146,8 @@ export default function PnlCalendar({
 
               {row?.closed ? (
                 <span className="cal-imported">休市</span>
+              ) : row?.pending ? (
+                <span className="cal-imported">待更新</span>
               ) : imported ? (
                 <span className="cal-imported">導入</span>
               ) : (

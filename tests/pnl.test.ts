@@ -417,10 +417,30 @@ test('休市日不給盈虧 —— 沿用價格算出來的 0 是假的', () => 
 
   const rows = computeDailyPnl(stock, noTrades, ['2026-10-01', '2026-10-02'], tradingDays);
 
-  assert.equal(rows[0].closed, true);
+  assert.equal(rows[0].closed, true, '報價已經涵蓋到 10/2,中間缺的 10/1 是國定假日');
+  assert.equal(rows[0].pending, false);
   assert.equal(rows[0].pnl, null, '休市不該顯示成持平的 0');
   assert.equal(rows[1].closed, false);
   assert.equal(rows[1].pnl, 10000);
+});
+
+test('報價還沒抓到的當天不是休市,是待更新', () => {
+  /*
+   * 星期一下午排程跑完,但證交所還沒公布當天收盤價 ——
+   * 那天有快照(沿用上週五的價格)卻沒有股價列,看起來跟國定假日一模一樣。
+   * 用「已知報價涵蓋到哪一天」當界線才分得開。
+   */
+  const stock = new Map([
+    ['2026-09-04', 1000000],
+    ['2026-09-07', 1000000], // 沿用週五的價格
+  ]);
+  const tradingDays = new Set(['2026-09-03', '2026-09-04']);
+
+  const row = computeDailyPnl(stock, noTrades, ['2026-09-07'], tradingDays)[0];
+
+  assert.equal(row.closed, false, '星期一有開盤,不是休市');
+  assert.equal(row.pending, true);
+  assert.equal(row.pnl, null, '沿用價格算出來的 0 不該顯示成持平');
 });
 
 test('未來的日子是「還沒發生」,不是休市', () => {
