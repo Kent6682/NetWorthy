@@ -15,11 +15,13 @@ import { buildPriceLookup, previousDay } from '../lib/pnl.ts';
 import { loadSnapshotSources, replaceSnapshots } from './snapshot-data.ts';
 import {
   fetchTpexCloses,
+  fetchTwQuote,
   fetchTwSymbols,
   fetchTwseCloses,
   fetchUsClose,
   fetchUsdTwd,
   type PriceRow,
+  type TwBoard,
 } from './providers.ts';
 
 const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Taipei' });
@@ -64,51 +66,93 @@ async function syncPrices(): Promise<number> {
 
   const twSymbols = stocks.filter((s) => s.market === 'TW').map((s) => s.symbol);
   const usSymbols = stocks.filter((s) => s.market === 'US').map((s) => s.symbol);
-  const rows: PriceRow[] = [];
+
+  /*
+   * 以「代號 + 日期」為鍵去重。
+   *
+   * 台股可能同一檔拿到兩筆:大盤檔案給的(可能是舊日期)與 Yahoo 補的。
+   * 日期不同時兩筆都要寫;日期相同時只能留一筆 —— 同一批 upsert 裡出現重複的
+   * 主鍵,Postgres 會直接拒絕整批(ON CONFLICT DO UPDATE 不能重複影響同一列)。
+   */
+  const rows = new Map<string, PriceRow>();
+  const put = (r: PriceRow) => rows.set(`${r.symbol}|${r.price_date}`, r);
 
   // 台股:證交所 + 櫃買中心各一次呼叫,涵蓋所有上市櫃股票
   if (twSymbols.length > 0) {
     const lookup = new Map<string, PriceRow>();
+    const board = new Map<string, TwBoard>();
 
-    for (const [name, fetcher] of [
-      ['證交所', fetchTwseCloses],
-      ['櫃買中心', fetchTpexCloses],
+    for (const [name, fetcher, code] of [
+      ['證交所', fetchTwseCloses, 'TW'],
+      ['櫃買中心', fetchTpexCloses, 'TWO'],
     ] as const) {
       try {
         const map = await fetcher();
-        for (const [code, row] of map) if (!lookup.has(code)) lookup.set(code, row);
+        for (const [symbol, row] of map) {
+          if (lookup.has(symbol)) continue;
+          lookup.set(symbol, row);
+          board.set(symbol, code);
+        }
         log(`  ${name}:取得 ${map.size} 檔報價`);
       } catch (err) {
         console.warn(`  ${name} 抓取失敗:${(err as Error).message}`);
       }
     }
 
+    let patched = 0;
+
     for (const symbol of twSymbols) {
       const row = lookup.get(symbol);
-      if (row) rows.push(row);
-      else console.warn(`  找不到台股 ${symbol} 的報價(可能是新股、已下市,或代號填錯)`);
+      if (row) put(row);
+
+      /*
+       * 大盤檔案沒更新到今天就逐檔問 Yahoo。
+       *
+       * 證交所的 STOCK_DAY_ALL 實測到台北時間晚上九點還停在前一個交易日,
+       * 只靠它的話,當天的盈虧要等隔天早上那班才補得上。
+       * 今天休市的話 Yahoo 也只會回前一個交易日,跟大盤檔案同一筆,去重後無害。
+       */
+      if (!row || row.price_date < today) {
+        const fresh = await fetchTwQuote(symbol, board.get(symbol));
+
+        if (fresh) {
+          put(fresh);
+          if (fresh.price_date > (row?.price_date ?? '')) patched += 1;
+        } else if (!row) {
+          console.warn(`  找不到台股 ${symbol} 的報價(可能是新股、已下市,或代號填錯)`);
+        }
+
+        await new Promise((r) => setTimeout(r, 250)); // 別打太快
+      }
+    }
+
+    if (patched > 0) {
+      log(`  大盤檔案還沒更新到 ${today},用 Yahoo 補上 ${patched} 檔`);
     }
   }
 
   // 美股:逐檔抓,彼此不互相影響
   for (const symbol of usSymbols) {
     const row = await fetchUsClose(symbol);
-    if (row) rows.push(row);
+    if (row) put(row);
     else console.warn(`  找不到美股 ${symbol} 的報價`);
     await new Promise((r) => setTimeout(r, 250)); // 別打太快
   }
 
-  if (rows.length > 0) {
+  const priceRows = [...rows.values()];
+
+  if (priceRows.length > 0) {
     const { error: upsertError } = await db()
       .from('stock_price_history')
-      .upsert(rows.map((r) => ({ ...r, updated_at: new Date().toISOString() })), {
+      .upsert(priceRows.map((r) => ({ ...r, updated_at: new Date().toISOString() })), {
         onConflict: 'symbol,price_date',
       });
     if (upsertError) throw explainWriteError(upsertError, '寫入股價');
   }
 
-  log(`股價:成功寫入 ${rows.length} / ${stocks.length} 檔`);
-  return rows.length;
+  const covered = new Set(priceRows.map((r) => r.symbol)).size;
+  log(`股價:${covered} / ${stocks.length} 檔有報價,共寫入 ${priceRows.length} 列`);
+  return priceRows.length;
 }
 
 // ---------------------------------------------------------------------------

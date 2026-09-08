@@ -338,27 +338,68 @@ interface YahooChart {
   };
 }
 
+/**
+ * Yahoo 的最新收盤價。
+ *
+ * `ticker` 是 Yahoo 的代號(美股直接用,台股要加 .TW / .TWO),
+ * `reportAs` 是要記進資料庫的代號 —— 台股兩者不一樣。
+ */
+async function fetchYahooLatest(ticker: string, reportAs: string): Promise<PriceRow | null> {
+  const data = await fetchJson<YahooChart>(
+    `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&range=5d`
+  );
+
+  const result = data.chart?.result?.[0];
+  if (!result) return null;
+
+  const closes = result.indicators?.quote?.[0]?.close ?? [];
+  const stamps = result.timestamp ?? [];
+
+  for (let i = closes.length - 1; i >= 0; i -= 1) {
+    const close = closes[i];
+    if (close != null && stamps[i] != null) {
+      return {
+        symbol: reportAs,
+        price_date: new Date(stamps[i] * 1000).toISOString().slice(0, 10),
+        close_price: close,
+      };
+    }
+  }
+  return null;
+}
+
+/** Yahoo 的台股代號後綴:上市 .TW、上櫃 .TWO */
+export type TwBoard = 'TW' | 'TWO';
+
+/**
+ * 台股逐檔報價,用來補大盤每日檔案的延遲。
+ *
+ * 證交所的 STOCK_DAY_ALL 實測到台北時間晚上九點還停在前一個交易日,櫃買也
+ * 不見得趕得上 14:30 的排程。光靠它們的話,當天的盈虧要等隔天早上那班才補得上。
+ * Yahoo 收盤後幾分鐘就有資料,拿它把當天補齊。
+ *
+ * 知道是上市還上櫃就只試那一個,不確定就兩個都試。
+ */
+export async function fetchTwQuote(
+  symbol: string,
+  board?: TwBoard
+): Promise<PriceRow | null> {
+  for (const suffix of board ? [board] : (['TW', 'TWO'] as const)) {
+    try {
+      const row = await fetchYahooLatest(`${symbol}.${suffix}`, symbol);
+      if (row) return row;
+    } catch (err) {
+      console.warn(`  Yahoo 抓 ${symbol}.${suffix} 失敗:${(err as Error).message}`);
+    }
+  }
+  return null;
+}
+
 /** 先試 Yahoo Finance,失敗再退到 Stooq */
 export async function fetchUsClose(symbol: string): Promise<PriceRow | null> {
   try {
-    const data = await fetchJson<YahooChart>(
-      `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=5d`
-    );
-    const result = data.chart?.result?.[0];
-    if (result) {
-      const closes = result.indicators?.quote?.[0]?.close ?? [];
-      const stamps = result.timestamp ?? [];
-      for (let i = closes.length - 1; i >= 0; i -= 1) {
-        const close = closes[i];
-        if (close != null && stamps[i] != null) {
-          return {
-            symbol,
-            price_date: new Date(stamps[i] * 1000).toISOString().slice(0, 10),
-            close_price: close,
-          };
-        }
-      }
-    }
+    const row = await fetchYahooLatest(symbol, symbol);
+    if (row) return row;
   } catch (err) {
     console.warn(`  Yahoo 抓 ${symbol} 失敗(${(err as Error).message}),改試 Stooq`);
   }

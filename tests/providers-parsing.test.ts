@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import {
   fetchTwseCloses,
   fetchTpexCloses,
+  fetchTwQuote,
   fetchTwSymbols,
   fetchUsdTwd,
 } from '../scripts/providers.ts';
@@ -153,6 +154,81 @@ test('代號字典:一邊的來源掛掉,仍然回傳另一邊', async () => {
   const rows = await fetchTwSymbols();
   assert.equal(rows.length, 1, '證交所掛掉時還是要有上櫃的資料');
   assert.equal(rows[0].name, '環球晶');
+});
+
+/** Yahoo chart 端點的回應形狀 */
+function yahooChart(rows: [string, number | null][]) {
+  return {
+    chart: {
+      result: [
+        {
+          timestamp: rows.map(([d]) => Date.parse(`${d}T00:00:00Z`) / 1000),
+          indicators: { quote: [{ close: rows.map(([, c]) => c) }] },
+        },
+      ],
+    },
+  };
+}
+
+test('台股逐檔報價:記進資料庫的是原本的代號,不是 Yahoo 的 ticker', async () => {
+  const seen: string[] = [];
+  globalThis.fetch = (async (url: string) => {
+    seen.push(String(url));
+    return {
+      ok: true,
+      status: 200,
+      json: async () => yahooChart([['2026-09-07', 2460], ['2026-09-08', 2470]]),
+    } as unknown as Response;
+  }) as unknown as typeof fetch;
+
+  const row = await fetchTwQuote('2330', 'TW');
+
+  assert.equal(row?.symbol, '2330', '不能寫成 2330.TW');
+  assert.equal(row?.price_date, '2026-09-08', '取最新一天');
+  assert.equal(row?.close_price, 2470);
+  assert.equal(seen.length, 1, '指定上市就只問一次');
+  assert.match(seen[0], /2330\.TW\?/);
+});
+
+test('台股逐檔報價:沒指定上市櫃時,.TW 落空會再試 .TWO', async () => {
+  const seen: string[] = [];
+  globalThis.fetch = (async (url: string) => {
+    seen.push(String(url));
+    // 上市查無此檔,上櫃才有
+    const empty = String(url).includes('.TW?');
+    return {
+      ok: true,
+      status: 200,
+      json: async () =>
+        empty ? { chart: { result: [] } } : yahooChart([['2026-09-08', 28.5]]),
+    } as unknown as Response;
+  }) as unknown as typeof fetch;
+
+  const row = await fetchTwQuote('00687B');
+
+  assert.equal(row?.symbol, '00687B');
+  assert.equal(row?.close_price, 28.5);
+  assert.equal(seen.length, 2, '先試 .TW 再試 .TWO');
+  assert.match(seen[1], /00687B\.TWO\?/);
+});
+
+test('台股逐檔報價:兩邊都抓不到時回 null,不要讓整份同步掛掉', async () => {
+  globalThis.fetch = (async () => ({ ok: false, status: 404 }) as unknown as Response) as typeof fetch;
+  assert.equal(await fetchTwQuote('9999'), null);
+});
+
+test('台股逐檔報價:略過還沒有收盤價的當天', async () => {
+  // 盤中 Yahoo 可能給出當天但 close 是 null
+  globalThis.fetch = (async () =>
+    ({
+      ok: true,
+      status: 200,
+      json: async () => yahooChart([['2026-09-07', 2460], ['2026-09-08', null]]),
+    }) as unknown as Response) as typeof fetch;
+
+  const row = await fetchTwQuote('2330', 'TW');
+  assert.equal(row?.price_date, '2026-09-07', '往回取最後一個有收盤價的日子');
+  assert.equal(row?.close_price, 2460);
 });
 
 test('匯率主來源 open.er-api 解析', async () => {
