@@ -138,11 +138,13 @@ export default function DayDetail({
                 {rows.map((row) => (
                   <tr key={row.symbol} style={{ borderTop: '1px solid var(--divider)' }}>
                     <td className="px-5 py-2.5">
-                      <span className="font-medium">
-                        {names.get(row.symbol)
-                          ? `${names.get(row.symbol)} (${row.symbol})`
-                          : row.symbol}
-                      </span>
+                      {/* 跟手機一樣:名稱正常字、代號小一號灰字 */}
+                      <span className="font-medium">{names.get(row.symbol) ?? row.symbol}</span>
+                      {names.get(row.symbol) && (
+                        <span className="ml-1.5 text-xs" style={{ color: 'var(--text-muted)' }}>
+                          {row.symbol}
+                        </span>
+                      )}
                       {row.trades.map((t, i) => (
                         <span
                           key={i}
