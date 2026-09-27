@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { selectAll } from '../scripts/db.ts';
+import { selectAll } from '../lib/paginate.ts';
 
 test('分頁撈完:超過一頁的資料不能被截掉', async () => {
   const rows = Array.from({ length: 2345 }, (_, i) => i);

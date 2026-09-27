@@ -6,6 +6,7 @@ import ConfirmDelete from '@/components/ConfirmDelete';
 import { deleteAccountTransaction } from '@/app/actions/accounts';
 import { createClient } from '@/lib/supabase/server';
 import { formatDate, formatMoney } from '@/lib/format';
+import { selectAll } from '@/lib/paginate';
 import { getSession } from '@/lib/queries';
 import {
   ACCOUNT_TXN_LABEL,
@@ -34,14 +35,17 @@ export default async function AccountDetailPage({
 
   if (!account) notFound();
 
-  const { data: rawTxns } = await supabase
-    .from('account_transactions')
-    .select('*')
-    .eq('account_id', id)
-    .order('transaction_date', { ascending: false })
-    .order('created_at', { ascending: false });
-
-  const transactions = (rawTxns ?? []) as AccountTransaction[];
+  // 每一列的「結餘」是從期初累加上來的,少讀一頁就全部錯位 —— 分頁撈完
+  const transactions = await selectAll<AccountTransaction>((a, b) =>
+    supabase
+      .from('account_transactions')
+      .select('*')
+      .eq('account_id', id)
+      .order('transaction_date', { ascending: false })
+      .order('created_at', { ascending: false })
+      .order('id', { ascending: false })
+      .range(a, b)
+  );
   const isOwner = account.owner_id === session.userId;
 
   // 由舊到新累加,算出每一筆之後的結餘

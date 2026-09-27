@@ -4,7 +4,7 @@
  * 計算本身在 lib/snapshots.ts,這裡只負責跟資料庫來回。
  */
 
-import { db, explainWriteError } from './db.ts';
+import { db, explainWriteError, selectAll } from './db.ts';
 import type { StockTransaction } from '../lib/holdings.ts';
 import type { SnapshotRow, SnapshotSources } from '../lib/snapshots.ts';
 
@@ -17,41 +17,57 @@ import type { SnapshotRow, SnapshotSources } from '../lib/snapshots.ts';
  * 還沒有人加入家庭時回 null。
  */
 export async function loadSnapshotSources(): Promise<SnapshotSources | null> {
-  const { data: profiles, error: profileError } = await db()
-    .from('profiles')
-    .select('id, household_id')
-    .not('household_id', 'is', null);
-  if (profileError) throw new Error(`讀取成員失敗:${profileError.message}`);
-  if (!profiles || profiles.length === 0) return null;
+  /*
+   * 每張表都分頁撈完 —— 帳戶流水與股票交易會一直長,超過 1,000 列時
+   * 少讀的那一截會讓快照的餘額與持股默默算錯。排序都補到主鍵,分頁才穩定。
+   */
+  const read = async <T>(label: string, run: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: { message: string } | null }>) => {
+    try {
+      return await selectAll<T>(run);
+    } catch (err) {
+      throw new Error(`讀取${label}失敗:${(err as Error).message}`);
+    }
+  };
 
-  const { data: accounts, error: acctError } = await db()
-    .from('accounts')
-    .select('id, owner_id, currency, is_archived');
-  if (acctError) throw new Error(`讀取帳戶失敗:${acctError.message}`);
+  const profiles = await read<{ id: string; household_id: string }>('成員', (a, b) =>
+    db().from('profiles').select('id, household_id').not('household_id', 'is', null).order('id').range(a, b)
+  );
+  if (profiles.length === 0) return null;
 
-  const { data: accountTxns, error: txnError } = await db()
-    .from('account_transactions')
-    .select('account_id, signed_amount, transaction_date');
-  if (txnError) throw new Error(`讀取帳戶收支失敗:${txnError.message}`);
-
-  const { data: stockTxns, error: stockError } = await db()
-    .from('stock_transactions')
-    .select('id, owner_id, symbol, type, shares, price, fee, transaction_date, created_at');
-  if (stockError) throw new Error(`讀取股票交易失敗:${stockError.message}`);
-
-  const { data: stocks } = await db().from('stocks').select('symbol, currency');
+  const [accounts, accountTxns, stockTxns, stocks] = await Promise.all([
+    read<SnapshotSources['accounts'][number]>('帳戶', (a, b) =>
+      db().from('accounts').select('id, owner_id, currency, is_archived').order('id').range(a, b)
+    ),
+    read<SnapshotSources['accountTxns'][number]>('帳戶收支', (a, b) =>
+      db()
+        .from('account_transactions')
+        .select('account_id, signed_amount, transaction_date')
+        .order('id')
+        .range(a, b)
+    ),
+    read<StockTransaction>('股票交易', (a, b) =>
+      db()
+        .from('stock_transactions')
+        .select('id, owner_id, symbol, type, shares, price, fee, transaction_date, created_at')
+        .order('id')
+        .range(a, b)
+    ),
+    read<{ symbol: string; currency: string }>('股票清單', (a, b) =>
+      db().from('stocks').select('symbol, currency').order('symbol').range(a, b)
+    ),
+  ]);
 
   return {
     profiles: profiles as SnapshotSources['profiles'],
-    accounts: (accounts ?? []) as SnapshotSources['accounts'],
-    accountTxns: (accountTxns ?? []) as SnapshotSources['accountTxns'],
-    stockTxns: (stockTxns ?? []).map((t) => ({
+    accounts,
+    accountTxns,
+    stockTxns: stockTxns.map((t) => ({
       ...t,
       shares: Number(t.shares),
       price: Number(t.price),
       fee: Number(t.fee),
-    })) as StockTransaction[],
-    currencyBySymbol: new Map((stocks ?? []).map((s) => [s.symbol, s.currency as string])),
+    })),
+    currencyBySymbol: new Map(stocks.map((st) => [st.symbol, st.currency])),
   };
 }
 

@@ -107,7 +107,7 @@ export async function xxx(_prev: unknown, formData: FormData): Promise<{ error?:
 
 頁面內的多筆查詢一律用 `Promise.all` 併發,不要寫成一連串 `await`。
 
-**PostgREST 單次最多回 1,000 列,超過的部分無聲截斷。** 日曆一次撈整年(月曆與 12 個月列同一份資料,月合計才保證等於格子加總),所以 `getTradingDays()` 按月切段併發;年度表用 `getMarketDataNear()` 只撈每個年底前 30 天。新增可能變長的查詢時照這兩個模式,腳本端用 `selectAll()`。換頁慢的根本解法是減少往返與縮短距離(見 `vercel.json` 把函式釘在東京,與 Supabase 同區),不是拿骨架去蓋。
+**PostgREST 單次最多回 1,000 列,超過的部分無聲截斷。** 任何會隨時間變長的查詢(快照、交易、流水帳、價格)都要用 `lib/paginate.ts` 的 `selectAll()` 分頁撈完 —— 網站與腳本共用這一份(腳本經由 `scripts/db.ts` 轉出)。offset 分頁要求**排序唯一**,查詢最後一定要補主鍵(`.order('id')`,價格表補 `symbol`),否則兩頁之間會重複或漏列。趨勢圖「5 年」約 1,826 列,沒分頁的話被截掉的是最新那段。日曆一次撈整年(月曆與 12 個月列同一份資料,月合計才保證等於格子加總);年度表用 `getMarketDataNear()` 只撈每個年底前 30 天。換頁慢的根本解法是減少往返與縮短距離(見 `vercel.json` 把函式釘在東京,與 Supabase 同區),不是拿骨架去蓋。
 
 `getSession()` 用 React `cache()` 包著:layout 與頁面在同一個請求裡各呼叫一次,沒有這層會讓 `auth.getUser()` 與成員查詢整組跑兩次。新增類似的「每個請求都要用到」的查詢時照這個模式。
 

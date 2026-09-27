@@ -66,19 +66,5 @@ export function explainWriteError(
   );
 }
 
-/**
- * 把查詢分頁撈完。PostgREST 單次最多回 1,000 列,超過的部分會被**無聲截掉** ——
- * 不會報錯,只是資料少一截。呼叫端的查詢一定要帶 order,分頁才穩定。
- */
-export async function selectAll<T>(
-  page: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: { message: string } | null }>,
-  pageSize = 1000
-): Promise<T[]> {
-  const all: T[] = [];
-  for (let from = 0; ; from += pageSize) {
-    const { data, error } = await page(from, from + pageSize - 1);
-    if (error) throw new Error(error.message);
-    all.push(...(data ?? []));
-    if (!data || data.length < pageSize) return all;
-  }
-}
+// 分頁查詢跟網站共用同一份實作
+export { selectAll } from '../lib/paginate.ts';

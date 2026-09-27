@@ -14,7 +14,7 @@
  */
 
 import { pathToFileURL } from 'node:url';
-import { db, explainWriteError } from './db.ts';
+import { db, explainWriteError, selectAll } from './db.ts';
 import { carryForward, computeSnapshotRows, eachDay } from '../lib/snapshots.ts';
 import {
   clearRebuildRequests,
@@ -92,12 +92,14 @@ async function main() {
   log(`區間:${from} → ${today}(${days.length} 天,${months.length} 個月)\n`);
 
   // --- 1. 歷史收盤價 -------------------------------------------------------
-  const { data: stocks, error: stockError } = await db()
-    .from('stocks')
-    .select('symbol, market, currency');
-  if (stockError) throw new Error(`讀取股票清單失敗:${stockError.message}`);
-
-  const symbols = stocks ?? [];
+  let symbols: { symbol: string; market: string; currency: string }[];
+  try {
+    symbols = await selectAll((a, b) =>
+      db().from('stocks').select('symbol, market, currency').order('symbol').range(a, b)
+    );
+  } catch (err) {
+    throw new Error(`讀取股票清單失敗:${(err as Error).message}`);
+  }
   const pricesBySymbol = new Map<string, Map<string, number>>();
   const priceRows: { symbol: string; price_date: string; close_price: number }[] = [];
 

@@ -58,9 +58,15 @@ async function preflight(): Promise<void> {
 // ---------------------------------------------------------------------------
 
 async function syncPrices(): Promise<number> {
-  const { data: stocks, error } = await db().from('stocks').select('symbol, market');
-  if (error) throw new Error(`讀取股票清單失敗:${error.message}`);
-  if (!stocks || stocks.length === 0) {
+  let stocks: { symbol: string; market: string }[];
+  try {
+    stocks = await selectAll((a, b) =>
+      db().from('stocks').select('symbol, market').order('symbol').range(a, b)
+    );
+  } catch (err) {
+    throw new Error(`讀取股票清單失敗:${(err as Error).message}`);
+  }
+  if (stocks.length === 0) {
     log('沒有任何股票需要同步');
     return 0;
   }
@@ -338,16 +344,21 @@ async function rebuildSnapshots(usdToTwd: number): Promise<number> {
    * buildPriceLookup 就是「取某個序列在某天(含)以前的最後一個值」,
    * 把幣別當成 symbol 就能直接沿用,不必再寫一份同樣的邏輯。
    */
-  const { data: fxRows } = await db()
-    .from('fx_rates')
-    .select('rate_date, rate')
-    .eq('from_currency', 'USD')
-    .eq('to_currency', 'TWD')
-    .gte('rate_date', since)
-    .lte('rate_date', today);
+  // 重算區間長的時候匯率也可能超過一頁;每天一列,依日期排序就是唯一的
+  const fxRows = await selectAll<{ rate_date: string; rate: number }>((a, b) =>
+    db()
+      .from('fx_rates')
+      .select('rate_date, rate')
+      .eq('from_currency', 'USD')
+      .eq('to_currency', 'TWD')
+      .gte('rate_date', since)
+      .lte('rate_date', today)
+      .order('rate_date')
+      .range(a, b)
+  );
 
   const fxAt = buildPriceLookup(
-    (fxRows ?? []).map((r) => ({
+    fxRows.map((r) => ({
       symbol: 'USD',
       price_date: r.rate_date as string,
       close_price: Number(r.rate),

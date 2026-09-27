@@ -1,4 +1,5 @@
 import { cache } from 'react';
+import { selectAll } from './paginate.ts';
 import { createClient } from './supabase/server.ts';
 import type { StockTransaction } from './holdings.ts';
 import type { TradeRow } from './pnl.ts';
@@ -84,13 +85,18 @@ export async function getAccountBalances(ownerIds: string[]): Promise<AccountBal
 
 export async function getStockTransactions(ownerIds: string[]): Promise<StockTransaction[]> {
   const supabase = await createClient();
-  const { data } = await supabase
-    .from('stock_transactions')
-    .select('id, owner_id, account_id, symbol, type, shares, price, fee, transaction_date, created_at')
-    .in('owner_id', ownerIds)
-    .order('transaction_date', { ascending: false });
+  // 均價要從第一筆算起,少讀一頁持股就錯了 —— 一定要分頁撈完
+  const data = await selectAll<StockTransaction>((a, b) =>
+    supabase
+      .from('stock_transactions')
+      .select('id, owner_id, account_id, symbol, type, shares, price, fee, transaction_date, created_at')
+      .in('owner_id', ownerIds)
+      .order('transaction_date', { ascending: false })
+      .order('id')
+      .range(a, b)
+  );
 
-  return (data ?? []).map((t) => ({
+  return data.map((t) => ({
     ...t,
     shares: Number(t.shares),
     price: Number(t.price),
@@ -119,17 +125,15 @@ export async function getSnapshotRange(
 ): Promise<NetWorthSnapshot[]> {
   const supabase = await createClient();
 
-  let query = supabase
-    .from('daily_net_worth_snapshots')
-    .select('snapshot_date, cash_twd, stock_twd, total_twd, owner_id')
-    .gte('snapshot_date', from)
-    .lte('snapshot_date', to)
-    .order('snapshot_date');
-
-  query = scope === 'family' ? query.is('owner_id', null) : query.eq('owner_id', userId);
-
-  const { data } = await query;
-  return (data ?? []) as NetWorthSnapshot[];
+  return selectAll<NetWorthSnapshot>((a, b) => {
+    const query = supabase
+      .from('daily_net_worth_snapshots')
+      .select('snapshot_date, cash_twd, stock_twd, total_twd, owner_id')
+      .gte('snapshot_date', from)
+      .lte('snapshot_date', to);
+    const scoped = scope === 'family' ? query.is('owner_id', null) : query.eq('owner_id', userId);
+    return scoped.order('snapshot_date').order('id').range(a, b);
+  });
 }
 
 /**
@@ -145,15 +149,19 @@ export async function getStockTradesInRange(
 ): Promise<TradeRow[]> {
   const supabase = await createClient();
 
-  const { data } = await supabase
-    .from('stock_transactions')
-    .select('type, symbol, shares, price, fee, transaction_date')
-    .in('owner_id', ownerIds)
-    .gte('transaction_date', from)
-    .lte('transaction_date', to)
-    .order('transaction_date');
+  const data = await selectAll<TradeRow>((a, b) =>
+    supabase
+      .from('stock_transactions')
+      .select('type, symbol, shares, price, fee, transaction_date')
+      .in('owner_id', ownerIds)
+      .gte('transaction_date', from)
+      .lte('transaction_date', to)
+      .order('transaction_date')
+      .order('id')
+      .range(a, b)
+  );
 
-  return (data ?? []).map((t) => ({
+  return data.map((t) => ({
     type: t.type,
     symbol: t.symbol,
     shares: Number(t.shares),
@@ -175,14 +183,20 @@ export async function getPricesInRange(
 ): Promise<{ symbol: string; price_date: string; close_price: number }[]> {
   const supabase = await createClient();
 
-  const { data } = await supabase
-    .from('stock_price_history')
-    .select('symbol, price_date, close_price')
-    .gte('price_date', from)
-    .lte('price_date', to)
-    .order('price_date');
+  // 主鍵是 (symbol, price_date),兩個都排才唯一
+  const data = await selectAll<{ symbol: string; price_date: string; close_price: number }>(
+    (a, b) =>
+      supabase
+        .from('stock_price_history')
+        .select('symbol, price_date, close_price')
+        .gte('price_date', from)
+        .lte('price_date', to)
+        .order('price_date')
+        .order('symbol')
+        .range(a, b)
+  );
 
-  return (data ?? []).map((p) => ({
+  return data.map((p) => ({
     symbol: p.symbol as string,
     price_date: p.price_date as string,
     close_price: Number(p.close_price),
@@ -249,13 +263,23 @@ export async function getTradingDays(from: string, to: string): Promise<Set<stri
     cursor = new Date(Date.UTC(y, m, 1)).toISOString().slice(0, 10);
   }
 
+  // 持股一多,單月也可能超過一頁(50 檔 × 22 天),每段各自再分頁
   const results = await Promise.all(
-    chunks.map(([a, b]) =>
-      supabase.from('stock_price_history').select('price_date').gte('price_date', a).lte('price_date', b)
+    chunks.map(([start, end]) =>
+      selectAll<{ price_date: string }>((a, b) =>
+        supabase
+          .from('stock_price_history')
+          .select('price_date')
+          .gte('price_date', start)
+          .lte('price_date', end)
+          .order('price_date')
+          .order('symbol')
+          .range(a, b)
+      )
     )
   );
 
-  return new Set(results.flatMap(({ data }) => (data ?? []).map((r) => r.price_date as string)));
+  return new Set(results.flatMap((rows) => rows.map((r) => r.price_date)));
 }
 
 /** 期間內的台股休市日 → 節日名稱 */
@@ -285,14 +309,16 @@ export async function getSnapshots(
 ): Promise<NetWorthSnapshot[]> {
   const supabase = await createClient();
 
-  let query = supabase
-    .from('daily_net_worth_snapshots')
-    .select('snapshot_date, cash_twd, stock_twd, total_twd, owner_id')
-    .gte('snapshot_date', since)
-    .order('snapshot_date');
-
-  query = scope === 'family' ? query.is('owner_id', null) : query.eq('owner_id', userId);
-
-  const { data } = await query;
-  return (data ?? []) as NetWorthSnapshot[];
+  /*
+   * 「5 年」約 1,826 列,超過單次上限。由舊到新排序的話,被截掉的是最新的一段 ——
+   * 趨勢圖會停在兩年多前,主數字卻是今天的,中間憑空多出一道斷崖。
+   */
+  return selectAll<NetWorthSnapshot>((a, b) => {
+    const query = supabase
+      .from('daily_net_worth_snapshots')
+      .select('snapshot_date, cash_twd, stock_twd, total_twd, owner_id')
+      .gte('snapshot_date', since);
+    const scoped = scope === 'family' ? query.is('owner_id', null) : query.eq('owner_id', userId);
+    return scoped.order('snapshot_date').order('id').range(a, b);
+  });
 }
