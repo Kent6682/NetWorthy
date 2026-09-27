@@ -19,6 +19,7 @@ import {
   monthGrid,
   monthTotal,
   parseDay,
+  summarizeMonths,
   parseMonth,
   previousDay,
   shiftMonth,
@@ -193,7 +194,60 @@ test('當月合計只加算得出來的日子', () => {
   );
 
   // 9/2 沒有快照 → null;9/3 的前一天也沒有 → null
-  assert.deepEqual(monthTotal(rows), { pnl: 10000, days: 1 });
+  assert.deepEqual(monthTotal(rows), { pnl: 10000, days: 1, up: 1, down: 0, percent: 1 });
+});
+
+test('當月百分比的分母是第一個有盈虧那天的前一日市值,漲跌天數分開算', () => {
+  const rows = computeDailyPnl(
+    new Map([
+      ['2026-08-31', 1000000],
+      ['2026-09-01', 1020000],
+      ['2026-09-02', 1010000],
+      ['2026-09-03', 1010000],
+      ['2026-09-04', 1040000],
+    ]),
+    noTrades,
+    ['2026-09-01', '2026-09-02', '2026-09-03', '2026-09-04']
+  );
+
+  const t = monthTotal(rows);
+  assert.equal(t.pnl, 40000);
+  assert.equal(t.percent, 4, '40,000 ÷ 8/31 的 1,000,000');
+  assert.equal(t.up, 2);
+  assert.equal(t.down, 1);
+  assert.equal(t.days, 4, '持平那天也算有資料,只是不算漲也不算跌');
+});
+
+test('持有起始那個月:分母是導入那天的市值', () => {
+  const rows = computeDailyPnl(
+    new Map([
+      ['2026-05-13', 500000],
+      ['2026-05-14', 505000],
+    ]),
+    groupTradesByDate([trade({ type: 'initial', transaction_date: '2026-05-13' })]),
+    ['2026-05-13', '2026-05-14']
+  );
+
+  const t = monthTotal(rows);
+  assert.equal(t.pnl, 5000);
+  assert.equal(t.percent, 1);
+});
+
+test('整年依月份分組結算', () => {
+  const rows = computeDailyPnl(
+    new Map([
+      ['2026-08-31', 100],
+      ['2026-09-01', 110],
+      ['2026-09-30', 100],
+      ['2026-10-01', 130],
+    ]),
+    noTrades,
+    ['2026-09-01', '2026-10-01']
+  );
+  const months = summarizeMonths(rows);
+  assert.equal(months.get('2026-09')?.pnl, 10);
+  assert.equal(months.get('2026-10')?.pnl, 30);
+  assert.equal(months.has('2026-11'), false);
 });
 
 // --- 單日明細 ------------------------------------------------------------

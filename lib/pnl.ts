@@ -38,6 +38,8 @@ export interface DailyPnl {
   pnl: number | null;
   percent: number | null;
   stock: number | null;
+  /** 前一天的股票市值 —— 當月百分比的分母要用第一個有盈虧那天的前一天 */
+  prev: number | null;
   trades: DayTrades | null;
   /** 那天沒有開盤(週末、國定假日) */
   closed: boolean;
@@ -143,6 +145,7 @@ export function computeDailyPnl(
     const base = {
       date,
       stock: stock ?? null,
+      prev: prev ?? null,
       trades,
       closed,
       pending,
@@ -353,15 +356,59 @@ export function parseDay(value: string | undefined, month: string): string | und
 }
 
 /** 當月合計 —— 只加算得出來的那幾天 */
-export function monthTotal(rows: DailyPnl[]): { pnl: number; days: number } {
+export interface MonthSummary {
+  pnl: number;
+  /** 算得出盈虧的日子 */
+  days: number;
+  up: number;
+  down: number;
+  /**
+   * 當月報酬率。分母是當月第一個有盈虧那天的**前一日**股票市值 ——
+   * 通常是上個月底;持有起始那個月則是導入那天。算不出來是 null。
+   */
+  percent: number | null;
+}
+
+/**
+ * 當月合計 = 當月每一格日曆加總,所以一定跟格子對得上。
+ * 漲跌天數以四捨五入到元為準,剛好 0 的日子兩邊都不算。
+ */
+export function monthTotal(rows: DailyPnl[]): MonthSummary {
   let pnl = 0;
   let days = 0;
-  for (const r of rows) {
+  let up = 0;
+  let down = 0;
+  let base: number | null = null;
+
+  for (const r of [...rows].sort((a, b) => a.date.localeCompare(b.date))) {
     if (r.pnl === null) continue;
+    if (base === null) base = r.prev;
     pnl += r.pnl;
     days += 1;
+    const rounded = Math.round(r.pnl);
+    if (rounded > 0) up += 1;
+    else if (rounded < 0) down += 1;
   }
-  return { pnl, days };
+
+  return {
+    pnl,
+    days,
+    up,
+    down,
+    percent: base !== null && base > 0 && days > 0 ? (pnl / base) * 100 : null,
+  };
+}
+
+/** 把一整年的每日盈虧依月份分組結算,鍵是 YYYY-MM */
+export function summarizeMonths(rows: DailyPnl[]): Map<string, MonthSummary> {
+  const byMonth = new Map<string, DailyPnl[]>();
+  for (const r of rows) {
+    const m = r.date.slice(0, 7);
+    const list = byMonth.get(m);
+    if (list) list.push(r);
+    else byMonth.set(m, [r]);
+  }
+  return new Map([...byMonth].map(([m, list]) => [m, monthTotal(list)]));
 }
 
 /**

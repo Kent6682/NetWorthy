@@ -38,11 +38,14 @@ export default function DayDetail({
   rows,
   total,
   hasInitial,
+  names,
 }: {
   date: string;
   rows: HoldingPnl[];
   total: number | null;
   hasInitial: boolean;
+  /** 代號 → 商品名稱;沒有名稱的只顯示代號 */
+  names: Map<string, string>;
 }) {
   return (
     <section className="card-flush mt-5 overflow-hidden">
@@ -75,7 +78,22 @@ export default function DayDetail({
             {rows.map((row) => (
               <div key={row.symbol} className="px-4 py-3">
                 <div className="flex items-baseline justify-between gap-3">
-                  <span className="truncate text-sm font-medium">{row.symbol}</span>
+                  {/* 手機:名稱正常字、代號小一號灰字;放不下時截名稱,代號留著 */}
+                  <span className="flex min-w-0 items-baseline gap-1.5 text-sm">
+                    {names.get(row.symbol) ? (
+                      <>
+                        <span className="truncate font-medium">{names.get(row.symbol)}</span>
+                        <span
+                          className="tnum shrink-0 text-xs"
+                          style={{ color: 'var(--text-muted)' }}
+                        >
+                          {row.symbol}
+                        </span>
+                      </>
+                    ) : (
+                      <span className="truncate font-medium">{row.symbol}</span>
+                    )}
+                  </span>
                   <span className="flex shrink-0 items-baseline gap-2 text-sm">
                     <Percent value={row.percent} />
                     <Pnl value={row.pnl} />
@@ -120,7 +138,11 @@ export default function DayDetail({
                 {rows.map((row) => (
                   <tr key={row.symbol} style={{ borderTop: '1px solid var(--divider)' }}>
                     <td className="px-5 py-2.5">
-                      <span className="font-medium">{row.symbol}</span>
+                      <span className="font-medium">
+                        {names.get(row.symbol)
+                          ? `${names.get(row.symbol)} (${row.symbol})`
+                          : row.symbol}
+                      </span>
                       {row.trades.map((t, i) => (
                         <span
                           key={i}

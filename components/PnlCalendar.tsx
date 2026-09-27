@@ -1,6 +1,6 @@
 import Link from 'next/link';
-import { formatMoney, formatPercent, formatSignedCompact } from '@/lib/format';
-import { holidayLabel, shiftMonth, type DailyPnl } from '@/lib/pnl';
+import { formatMoney, formatNumber, formatPercent, formatSignedCompact } from '@/lib/format';
+import { holidayLabel, shiftMonth, type DailyPnl, type MonthSummary } from '@/lib/pnl';
 
 /**
  * 每日盈虧月曆。
@@ -42,6 +42,19 @@ function describeDay(date: string, row: DailyPnl | undefined, holiday?: string):
   return parts.join(' · ');
 }
 
+/** 帶正負號的完整金額:+123,456 / −8,450 / 0 */
+function signedFull(value: number): string {
+  const rounded = Math.round(value);
+  if (rounded === 0) return '0';
+  return `${rounded > 0 ? '+' : '−'}${formatNumber(Math.abs(rounded))}`;
+}
+
+/** 賺紅賠綠,剛好 0 不上色 */
+function toneClass(value: number): string {
+  const rounded = Math.round(value);
+  return rounded > 0 ? 'pos' : rounded < 0 ? 'neg' : '';
+}
+
 function Arrow({ dir }: { dir: 'prev' | 'next' }) {
   return (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
@@ -69,7 +82,7 @@ export default function PnlCalendar({
   byDate: Map<string, DailyPnl>;
   today: string;
   scope: string;
-  total: { pnl: number; days: number };
+  total: MonthSummary;
   selectedDay?: string;
   /** 休市日 → 節日名稱 */
   holidays: Map<string, string>;
@@ -100,11 +113,23 @@ export default function PnlCalendar({
           </Link>
         </div>
 
-        <div className="text-right">
-          <div className="eyebrow">當月合計</div>
-          <div className={`tnum text-sm font-semibold ${total.pnl >= 0 ? 'pos' : 'neg'}`}>
-            {total.days === 0 ? '—' : formatSignedCompact(total.pnl)}
-          </div>
+        <div className="min-w-0 text-right">
+          <div className="eyebrow">{Number(mon)} 月合計</div>
+          {total.days === 0 ? (
+            <div className="tnum text-base font-semibold">—</div>
+          ) : (
+            <>
+              <div className={`tnum text-base font-semibold leading-snug ${toneClass(total.pnl)}`}>
+                {signedFull(total.pnl)}
+                {total.percent !== null && (
+                  <span className="ml-1.5 text-xs font-medium">{formatPercent(total.percent, 2)}</span>
+                )}
+              </div>
+              <div className="eyebrow tnum">
+                漲 {total.up} 天 · 跌 {total.down} 天
+              </div>
+            </>
+          )}
         </div>
       </div>
 
@@ -196,6 +221,8 @@ export default function PnlCalendar({
         已經扣掉當天買賣造成的部位變動 ——
         買進 50 萬不是賺 50 萬,那只是現金換成股票;手續費與稅則算成當天的損失。
         導入既有持股的那天不計盈虧,因為那天你既沒賺也沒賠。
+        月合計是當月每一格的加總,百分比的分母是上個月底的股票市值。
+        它跟總覽「年度損益」的數字會有一點差距:日曆在導入既有持股那天不算盈虧,年度表則是跟你輸入的成本比。
         國定假日會寫上節日名稱(來自證交所的年度行事曆)。
         空白的日子是沒有資料可比 —— 還沒到,或還在第一筆持有起始日之前。
       </p>

@@ -933,3 +933,70 @@ a.cal-cell:focus-visible {
   padding-left: 12px;
   font-size: 0.75rem;
 }
+
+/* ---------------------------------------------------------------------------
+   日曆上方的 12 個月列 —— 手機 4 × 3,桌機一排 12 格
+   --------------------------------------------------------------------------- */
+.month-strip {
+  margin-bottom: 16px;
+}
+
+.month-strip-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  background: var(--divider);
+  border: 1px solid var(--hairline-ring);
+  border-radius: var(--radius-control);
+  overflow: hidden;
+}
+
+@media (min-width: 768px) {
+  .month-strip-grid {
+    grid-template-columns: repeat(12, minmax(0, 1fr));
+  }
+}
+
+.month-strip-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-height: 48px;
+  padding: 7px 4px;
+  background: var(--surface-1);
+  color: inherit;
+  text-decoration: none;
+}
+
+.month-strip-cell:hover {
+  background: var(--surface-sunken);
+}
+
+.month-strip-cell:focus-visible {
+  outline: 2px solid var(--series-1);
+  outline-offset: -2px;
+}
+
+/* 目前看的這個月:底部一條線,跟日曆的選取框是同一種語言 */
+.month-strip-cell[data-current='true'] {
+  box-shadow: inset 0 -2px 0 var(--text-primary);
+  background: var(--surface-sunken);
+}
+
+.month-strip-cell[data-future='true'] {
+  color: var(--text-muted);
+}
+
+.month-strip-label {
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+  line-height: 1.2;
+}
+
+.month-strip-value {
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+}

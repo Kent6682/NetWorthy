@@ -236,13 +236,26 @@ export async function getMarketDataNear(dates: string[], lookbackDays = 30) {
 export async function getTradingDays(from: string, to: string): Promise<Set<string>> {
   const supabase = await createClient();
 
-  const { data } = await supabase
-    .from('stock_price_history')
-    .select('price_date')
-    .gte('price_date', from)
-    .lte('price_date', to);
+  /*
+   * 每檔每天一列,整年撈下來會超過 PostgREST 單次 1,000 列的上限而被無聲截斷
+   * (5 檔 × 250 天就超過了)。切成一個月一段併發去撈,每段只有一兩百列。
+   */
+  const chunks: [string, string][] = [];
+  let cursor = from;
+  while (cursor <= to) {
+    const [y, m] = cursor.split('-').map(Number);
+    const monthEnd = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
+    chunks.push([cursor, monthEnd < to ? monthEnd : to]);
+    cursor = new Date(Date.UTC(y, m, 1)).toISOString().slice(0, 10);
+  }
 
-  return new Set((data ?? []).map((r) => r.price_date as string));
+  const results = await Promise.all(
+    chunks.map(([a, b]) =>
+      supabase.from('stock_price_history').select('price_date').gte('price_date', a).lte('price_date', b)
+    )
+  );
+
+  return new Set(results.flatMap(({ data }) => (data ?? []).map((r) => r.price_date as string)));
 }
 
 /** 期間內的台股休市日 → 節日名稱 */
