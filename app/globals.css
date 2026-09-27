@@ -841,3 +841,95 @@ a.cal-cell:focus-visible {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ---------------------------------------------------------------------------
+   年度損益表 —— 四欄對齊的列,點開是直式算式
+   --------------------------------------------------------------------------- */
+.yearly-grid {
+  display: grid;
+  grid-template-columns: minmax(4.5rem, 1fr) repeat(3, minmax(0, 1.2fr));
+  gap: 8px;
+  align-items: baseline;
+}
+
+.yearly-grid > span:not(:first-child) {
+  text-align: right;
+}
+
+.yearly-head {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--baseline);
+}
+
+.yearly-row {
+  border-bottom: 1px solid var(--divider);
+}
+
+.yearly-row > summary {
+  list-style: none;
+  cursor: pointer;
+  min-height: 44px;
+  padding: 11px 0;
+  font-size: 0.875rem;
+}
+
+.yearly-row > summary::-webkit-details-marker {
+  display: none;
+}
+
+.yearly-row > summary:focus-visible {
+  outline: 2px solid var(--series-1);
+  outline-offset: 2px;
+}
+
+.yearly-year::after {
+  content: '▸';
+  margin-left: 6px;
+  font-size: 0.7em;
+  color: var(--text-muted);
+}
+
+.yearly-row[open] .yearly-year::after {
+  content: '▾';
+}
+
+/* 全部統計那列:上方加粗線,與各年分開 */
+.yearly-row[data-total='true'] {
+  border-top: 1px solid var(--baseline);
+  border-bottom: 0;
+}
+
+.yearly-row[data-total='true'] .yearly-year {
+  font-weight: 600;
+}
+
+.yearly-breakdown {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border-radius: var(--radius-control);
+  background: var(--surface-sunken);
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+}
+
+.yearly-line {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 3px 0;
+}
+
+.yearly-line[data-strong='true'] {
+  margin-top: 4px;
+  padding-top: 7px;
+  border-top: 1px solid var(--baseline);
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.yearly-line[data-sub='true'] {
+  padding-left: 12px;
+  font-size: 0.75rem;
+}

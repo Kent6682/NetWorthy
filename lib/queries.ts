@@ -190,6 +190,43 @@ export async function getPricesInRange(
 }
 
 /**
+ * 年度表用:只撈每個年底前一段的收盤價與匯率。
+ *
+ * 不一次撈整段歷史 —— 幾年下來會超過 PostgREST 單次 1,000 列的上限,
+ * 超過的部分會被無聲截掉。每個年底往前 30 天就夠涵蓋最長的連假。
+ */
+export async function getMarketDataNear(dates: string[], lookbackDays = 30) {
+  const supabase = await createClient();
+  const windows = dates.map((d) => {
+    const from = new Date(`${d}T00:00:00Z`);
+    from.setUTCDate(from.getUTCDate() - lookbackDays);
+    return { from: from.toISOString().slice(0, 10), to: d };
+  });
+
+  const [prices, fx] = await Promise.all([
+    Promise.all(windows.map((w) => getPricesInRange(w.from, w.to))),
+    Promise.all(
+      windows.map((w) =>
+        supabase
+          .from('fx_rates')
+          .select('rate_date, rate')
+          .eq('from_currency', 'USD')
+          .eq('to_currency', 'TWD')
+          .gte('rate_date', w.from)
+          .lte('rate_date', w.to)
+      )
+    ),
+  ]);
+
+  return {
+    prices: prices.flat(),
+    usdTwd: fx.flatMap(({ data }) =>
+      (data ?? []).map((r) => ({ date: r.rate_date as string, rate: Number(r.rate) }))
+    ),
+  };
+}
+
+/**
  * 日曆用:區間內真正有開盤的日子。
  *
  * 判斷依據是 stock_price_history 有沒有那天的收盤價 —— 精確,而且不用維護

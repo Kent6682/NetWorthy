@@ -1,6 +1,7 @@
 import { Suspense } from 'react';
 import DonutChart from '@/components/DonutChart';
 import TrendChart from '@/components/TrendChart';
+import YearlyPnl from '@/components/YearlyPnl';
 import FilterBar from '@/components/FilterBar';
 import { formatMoney, formatPercent, todayInTaipei } from '@/lib/format';
 import {
@@ -16,6 +17,7 @@ import {
 import {
   getAccountBalances,
   getLatestPrices,
+  getMarketDataNear,
   getSession,
   getSnapshots,
   getStocks,
@@ -25,6 +27,8 @@ import {
   ownerIdsForScope,
   parseScope,
 } from '@/lib/queries';
+import { buildPriceLookup } from '@/lib/pnl';
+import { computeYearly, sumYears, yearBoundaries } from '@/lib/yearly';
 
 export const dynamic = 'force-dynamic';
 
@@ -118,6 +122,25 @@ export default async function DashboardPage({
   );
   const slices = buildAssetSlices(holdings, balances, usdToTwd);
 
+  /*
+   * 年度損益:每年當一段期間結算(期末 − 期初 − 買入 + 賣出),詳見 lib/yearly.ts。
+   * 只需要每個年底附近的收盤價與匯率,不撈整段歷史。
+   */
+  const marketData = await getMarketDataNear(yearBoundaries(transactions, today));
+  const fxLookup = buildPriceLookup(
+    marketData.usdTwd.map((r) => ({ symbol: 'USD', price_date: r.date, close_price: r.rate }))
+  );
+  const currencyOf = new Map(stocks.map((st) => [st.symbol, st.currency]));
+  const yearly = computeYearly({
+    transactions,
+    currencyOf: (symbol) => currencyOf.get(symbol) ?? 'TWD',
+    priceOn: buildPriceLookup(marketData.prices),
+    usdToTwdOn: (date) => fxLookup('USD', date) ?? usdToTwd,
+    today,
+  });
+  const yearlyTotal = sumYears(yearly);
+  const thisYear = yearly.find((r) => r.year === Number(today.slice(0, 4)));
+
   const hasUsdAssets =
     holdings.some((h) => h.currency === 'USD') || balances.some((b) => b.currency === 'USD');
 
@@ -202,17 +225,18 @@ export default async function DashboardPage({
           value={formatMoney(totals.cashTwd)}
           hint={`${balances.filter((b) => !b.is_archived).length} 個帳戶`}
         />
+        {/* 今年的兩個數字來自年度表;目前持股的帳面未實現放在小字當參考 */}
         <StatTile
-          label="未實現損益"
-          value={formatMoney(totals.unrealizedPnLTwd)}
-          hint={formatPercent(unrealizedPercent)}
-          tone={toneOf(totals.unrealizedPnLTwd)}
+          label="今年未實現損益"
+          value={formatMoney(thisYear?.unrealized ?? 0)}
+          hint={`持股帳面 ${formatMoney(totals.unrealizedPnLTwd)}(${formatPercent(unrealizedPercent)})`}
+          tone={toneOf(thisYear?.unrealized ?? 0)}
         />
         <StatTile
-          label="已實現損益"
-          value={formatMoney(totals.realizedPnLTwd)}
-          hint="累計賣出結算"
-          tone={toneOf(totals.realizedPnLTwd)}
+          label="今年已實現損益"
+          value={formatMoney(thisYear?.realized ?? 0)}
+          hint={`${today.slice(0, 4)} 年賣出結算`}
+          tone={toneOf(thisYear?.realized ?? 0)}
         />
       </div>
 
@@ -220,6 +244,7 @@ export default async function DashboardPage({
       <div className="mt-4 space-y-4 sm:mt-5 sm:space-y-5">
         <TrendChart data={trendData} rangeLabel={rangeOption.label} />
         <DonutChart slices={slices} total={totals.totalTwd} />
+        <YearlyPnl rows={yearly} total={yearlyTotal} today={today} />
       </div>
 
       {hasUsdAssets && (
