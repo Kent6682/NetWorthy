@@ -46,6 +46,7 @@ node --test --experimental-strip-types --test-name-pattern="零股" tests/holdin
 1. **帳戶餘額 = 資料庫算的。** `accounts` 沒有餘額欄位。`account_transactions.signed_amount` 是 generated column(依 `type` 決定正負),`account_balances` view 把它加總。要改餘額只能新增一筆流水,不能改總額。
 2. **券商現金 = 觸發器算的。** `sync_broker_cash()` 掛在 `stock_transactions` 的 insert/update/delete 上,買進產生 `withdraw`、賣出產生 `deposit`,`initial`(期初持股)不連動。這些列帶有 `stock_transaction_id`,**永遠不要手動新增或修改** —— 觸發器每次都會先把舊的刪掉重建。
 3. **持股均價 = `lib/holdings.ts` 算的。** 移動加權平均法,網站與同步腳本共用這一份。排序規則(交易日 → 同日 initial 優先 → created_at → id)關係到結果可重現,改動前先看 `tests/holdings.test.ts` 的 14 個案例。
+   已實現損益的合計要用 `computeRealizedTwd()`,**不能**從 `buildValuedHoldings()` 加總 —— 那份清單濾掉了股數 0 的標的,而全部賣光的那一檔正是已實現損益的來源。
 
 4. **每日盈虧 = `lib/pnl.ts` 算的。** 公式是「股票市值變化 − 當日買進金額 + 當日賣出金額 − 手續費與稅」。**基準刻意是股票市值而不是總資產** —— 用總資產的話,沒勾選「同步更新券商帳戶餘額」的買賣會憑空生出資產(股票增加、現金卻沒減少)。導入既有持股(`initial`)那天不計盈虧,那天既沒賺也沒賠。現金完全不參與。
 

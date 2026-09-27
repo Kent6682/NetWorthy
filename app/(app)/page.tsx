@@ -6,6 +6,7 @@ import { formatMoney, formatPercent, todayInTaipei } from '@/lib/format';
 import {
   buildAssetSlices,
   buildValuedHoldings,
+  computeRealizedTwd,
   computeTotals,
   parseRange,
   pickLastTradingDays,
@@ -28,6 +29,14 @@ import {
 export const dynamic = 'force-dynamic';
 
 /** 統計方塊 — 手機 2×2,桌機 4 欄 */
+/** 損益的顏色:賺紅、賠綠,剛好 0 不上色 —— 0 塗成紅色看起來像賺了錢 */
+function toneOf(value: number): 'positive' | 'negative' | undefined {
+  const rounded = Math.round(value);
+  if (rounded > 0) return 'positive';
+  if (rounded < 0) return 'negative';
+  return undefined;
+}
+
 function StatTile({
   label,
   value,
@@ -101,7 +110,12 @@ export default async function DashboardPage({
     ]);
 
   const holdings = buildValuedHoldings(transactions, stocks, prices, usdToTwd);
-  const totals = computeTotals(holdings, balances, usdToTwd);
+  const totals = computeTotals(
+    holdings,
+    balances,
+    usdToTwd,
+    computeRealizedTwd(transactions, stocks, usdToTwd)
+  );
   const slices = buildAssetSlices(holdings, balances, usdToTwd);
 
   const hasUsdAssets =
@@ -192,13 +206,13 @@ export default async function DashboardPage({
           label="未實現損益"
           value={formatMoney(totals.unrealizedPnLTwd)}
           hint={formatPercent(unrealizedPercent)}
-          tone={totals.unrealizedPnLTwd >= 0 ? 'positive' : 'negative'}
+          tone={toneOf(totals.unrealizedPnLTwd)}
         />
         <StatTile
           label="已實現損益"
           value={formatMoney(totals.realizedPnLTwd)}
           hint="累計賣出結算"
-          tone={totals.realizedPnLTwd >= 0 ? 'positive' : 'negative'}
+          tone={toneOf(totals.realizedPnLTwd)}
         />
       </div>
 

@@ -119,10 +119,30 @@ export interface PortfolioTotals {
   realizedPnLTwd: number;
 }
 
+/**
+ * 已實現損益的合計(換算台幣)。
+ *
+ * 不能從 buildValuedHoldings() 的結果加總 —— 那份清單濾掉了已清空的標的,
+ * 而**全部賣光的那一檔正是已實現損益的來源**。從那裡加,賣光的損益會整筆消失。
+ */
+export function computeRealizedTwd(
+  transactions: StockTransaction[],
+  stocks: Stock[],
+  usdToTwd: number
+): number {
+  const currencyOf = new Map(stocks.map((s) => [s.symbol, s.currency]));
+  return calculateHoldings(transactions).reduce(
+    (sum, h) => sum + toTwd(h.realizedPnL, currencyOf.get(h.symbol) ?? 'TWD', usdToTwd),
+    0
+  );
+}
+
 export function computeTotals(
   holdings: ValuedHolding[],
   balances: AccountBalance[],
-  usdToTwd: number
+  usdToTwd: number,
+  /** 由 computeRealizedTwd() 算好傳進來,理由見那裡的說明 */
+  realizedPnLTwd: number
 ): PortfolioTotals {
   const stockTwd = holdings.reduce((sum, h) => sum + h.marketValueTwd, 0);
 
@@ -134,11 +154,6 @@ export function computeTotals(
     (sum, h) => sum + toTwd(h.unrealizedPnL, h.currency, usdToTwd),
     0
   );
-  const realizedPnLTwd = holdings.reduce(
-    (sum, h) => sum + toTwd(h.realizedPnL, h.currency, usdToTwd),
-    0
-  );
-
   return {
     stockTwd,
     cashTwd,
