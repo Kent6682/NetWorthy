@@ -1,5 +1,6 @@
 'use server';
 
+import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { createClient } from '@/lib/supabase/server';
@@ -116,6 +117,74 @@ export async function joinHousehold(_prev: AuthResult | null, formData: FormData
   const supabase = await createClient();
   const { error } = await supabase.rpc('join_household', { p_household_id: id });
   if (error) return { error: '加入失敗:請確認邀請碼是否正確' };
+
+  revalidatePath('/', 'layout');
+  redirect('/');
+}
+
+/**
+ * 寄出重設密碼信。
+ *
+ * 不管 Email 有沒有註冊過都回同一句話 —— 否則這個表單就能拿來試探誰有帳號。
+ * 信裡的連結會回到 /auth/callback,換成登入狀態後導到設定新密碼的頁面。
+ */
+export async function requestPasswordReset(
+  _prev: AuthResult | null,
+  formData: FormData
+): Promise<AuthResult> {
+  const email = String(formData.get('email') ?? '').trim();
+  if (!email) return { error: '請填寫 Email' };
+
+  // 用這次請求的網址當根,本機、預覽、正式站各自連回自己
+  const h = await headers();
+  const origin = h.get('origin') ?? `https://${h.get('host')}`;
+
+  const supabase = await createClient();
+  const { error } = await supabase.auth.resetPasswordForEmail(email, {
+    redirectTo: `${origin}/auth/callback?next=/auth/reset-password`,
+  });
+
+  if (error) {
+    const msg = error.message.toLowerCase();
+    if (msg.includes('rate limit') || msg.includes('too many') || error.status === 429) {
+      return { error: '寄信太頻繁了,請過幾分鐘再試。' };
+    }
+    return { error: `寄送失敗:${error.message}` };
+  }
+
+  return {
+    notice:
+      '如果這個 Email 有註冊過,重設密碼的信已經寄出。請在一小時內點信裡的連結;' +
+      '沒收到的話,先看一下垃圾郵件匣。',
+  };
+}
+
+/** 設定新密碼 —— 只有從重設信點進來、已經換成登入狀態時才會成功 */
+export async function updatePassword(
+  _prev: AuthResult | null,
+  formData: FormData
+): Promise<AuthResult> {
+  const password = String(formData.get('password') ?? '');
+  const confirm = String(formData.get('confirm') ?? '');
+
+  if (password.length < 8) return { error: '密碼至少要 8 個字元' };
+  if (password !== confirm) return { error: '兩次輸入的密碼不一樣' };
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) {
+    return { error: '重設連結已經失效或過期了,請回到登入頁重新申請「忘記密碼」。' };
+  }
+
+  const { error } = await supabase.auth.updateUser({ password });
+  if (error) {
+    if (error.message.toLowerCase().includes('different from the old')) {
+      return { error: '新密碼不能跟舊密碼一樣。' };
+    }
+    return { error: `更新失敗:${error.message}` };
+  }
 
   revalidatePath('/', 'layout');
   redirect('/');

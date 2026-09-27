@@ -1,0 +1,29 @@
+name: 保持排程啟用
+
+# 公開 repo 連續 60 天沒有任何活動(commit、PR 之類),GitHub 會自動停用所有排程工作流程 ——
+# 每日同步會在某天默默停止,股價與快照從此不再更新,而且不會有任何通知。
+#
+# 對工作流程呼叫一次「啟用」API 就會把那 60 天的計時重設,不需要產生假的 commit。
+# 這支自己也是排程,所以連自己一起重新啟用,才不會三個月後換它被停掉。
+on:
+  schedule:
+    # 每月 1 日 02:00 UTC = 台灣時間 10:00
+    - cron: '0 2 1 * *'
+  workflow_dispatch:
+
+permissions:
+  actions: write
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: 重新啟用排程工作流程(重設 60 天計時)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for wf in sync-prices.yml keepalive.yml; do
+            gh api -X PUT "repos/${{ github.repository }}/actions/workflows/$wf/enable"
+            echo "已重新啟用 $wf"
+          done

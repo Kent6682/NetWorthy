@@ -22,7 +22,7 @@ node --test --experimental-strip-types tests/holdings.test.ts
 node --test --experimental-strip-types --test-name-pattern="零股" tests/holdings.test.ts
 ```
 
-`npm run lint` 在 package.json 裡,但專案沒有 eslint 設定檔也沒裝 eslint,實際上跑不起來 —— 型別檢查請用 `npm run build`(`tsc --noEmit` 也可以)。
+專案沒有 eslint。型別檢查用 `npm run build`(`tsc --noEmit` 也可以)。
 
 資料庫沒有 migration 工具:`supabase/schema.sql` 是完整且可重複執行的單一份 SQL,改完整份貼進 Supabase SQL Editor 執行(或用 Supabase MCP 的 `apply_migration` 送同一份內容)。`supabase/test_schema.sql` 驗證觸發器、餘額計算、約束與 RLS,需要本機 PostgreSQL。
 
@@ -60,9 +60,11 @@ node --test --experimental-strip-types --test-name-pattern="零股" tests/holdin
 
 `daily_net_worth_snapshots` 是同步腳本每天整批重算的衍生資料:先刪掉那些日期的列再重寫,所以重跑不會重複。每位成員一列,另外每個家庭多一列 ``owner_id` IS NULL` 的合計 —— 首頁「全家」視角讀的就是那一列。
 
-**每日同步只重算今天與昨天。** 多算昨天是因為證交所常常在 14:30 那班排程跑完之後才公布當天收盤價 —— 那時候今天的快照會用前一個交易日的價格算出來,而隔天早上那班的 `today` 已經變成新的一天。少了這一步,那天的快照就永久停在錯的價格上。也因為要重算過去的日子,`rebuildSnapshots()` 不能用 `latest_stock_prices`(每檔只有最新一天),必須依日期查價。
+**每日同步平常只重算今天與昨天。** 多算昨天是因為證交所常常在 14:30 那班排程跑完之後才公布當天收盤價 —— 那時候今天的快照會用前一個交易日的價格算出來,而隔天早上那班的 `today` 已經變成新的一天。少了這一步,那天的快照就永久停在錯的價格上。也因為要重算過去的日子,`rebuildSnapshots()` 不能用 `latest_stock_prices`(每檔只有最新一天),必須依日期查價。
 
-**更早的日子仍然不會自己修正。** 補登一筆日期在過去的交易(最典型的是期初持股填了幾個月前的持有起始日)之後,那段期間的快照會停留在舊值,趨勢圖留下一道永久的斷崖。修正方式是跑 `npm run backfill`(或 GitHub Actions 的「回填歷史資產快照」)。
+**交易變動時從最早受影響的那天重算。** `stock_transactions` 與 `account_transactions` 上的 `request_snapshot_rebuild()` 觸發器,在任何新增、修改、刪除時把「新舊日期中較早的那天」記進 `snapshot_rebuild_requests`(每個家庭一列,只保留最早的日期)。下一次每日同步看到就從那天重算,算完只清掉開跑前提出的請求。所以補登、編輯、刪除舊交易都不用再手動回填。重算區間可能長達數月,查價一律用 `selectAll()` 分頁 —— PostgREST 單次 1,000 列的上限會**無聲截斷**。
+
+仍然需要 `npm run backfill`(或 GitHub Actions 的「回填歷史資產快照」)的情況:新增一檔**以前沒有的股票**、而交易日期在過去。每日同步只抓最新收盤價,那段期間的歷史價格要靠回填去證交所補抓,否則那段快照會退回成本價估算。
 
 快照的計算本身在 `lib/snapshots.ts` 的 `computeSnapshotRows()`,**每日同步與回填共用這一份**。它自己依日期過濾交易,所以回填撈一次資料就能算出好幾個月的每一天。要改算法只能改那裡。
 
@@ -97,6 +99,10 @@ export async function xxx(_prev: unknown, formData: FormData): Promise<{ error?:
 
 所有頁面都是 `export const dynamic = 'force-dynamic'` 的 async Server Component,從 `lib/queries.ts` 取資料。視角切換靠 URL search param:`parseScope(params.scope)` → `ownerIdsForScope()` 決定要納入哪些 `owner_id`。
 
+編輯股票交易走 `updateStockTransaction()`,與新增共用 `parseStockForm()`。連動全部在資料庫層:券商帳戶由 `sync_broker_cash()` 刪舊建新、快照由 `request_snapshot_rebuild()` 排入重算,應用程式只改那一列。刪除一律用 `components/ConfirmDelete.tsx` 的兩段式確認,不要用 `window.confirm()`。
+
+`/auth/*` 在 `session.ts` 的公開路徑內:`/auth/forgot-password` 寄信、`/auth/callback` 把信裡的 `code`(PKCE)或 `token_hash`(跨瀏覽器可用)換成登入狀態、`/auth/reset-password` 設新密碼。`callback` 的 `next` 只接受站內路徑。
+
 **刻意不放 `loading.tsx`。** 曾經每個路由都加過,但那會在伺服器回應前把畫面清空,使用者看到的是一個沒有資訊的空殼 —— 比「畫面還沒動」更難接受。現在改成保留舊內容不動,由 `Nav` 裡的 `PendingDot`(`useLinkStatus`)在被點的分頁上標一個點。要加回骨架前請先確認這個取捨。
 
 頁面內的多筆查詢一律用 `Promise.all` 併發,不要寫成一連串 `await`。換頁慢的根本解法是減少往返與縮短距離(見 `vercel.json` 把函式釘在東京,與 Supabase 同區),不是拿骨架去蓋。
@@ -116,4 +122,4 @@ export async function xxx(_prev: unknown, formData: FormData): Promise<{ error?:
 
 `.github/workflows/sync-prices.yml` 每個工作日跑兩次(台灣時間 14:30 台股收盤後、隔天 06:30 美股收盤後),也可手動觸發。資料來源都是免費、免金鑰的公開介面,各有備援(`scripts/providers.ts`):台股走證交所 + 櫃買中心各一次呼叫涵蓋全市場,美股逐檔抓(Yahoo → Stooq),匯率 open.er-api.com → Frankfurter。單一標的抓不到只會 warn,不中斷整份同步。
 
-repo 連續 60 天沒有 commit,GitHub 會自動停用排程。
+公開 repo 連續 60 天沒有活動,GitHub 會自動停用排程。`.github/workflows/keepalive.yml` 每月 1 日對排程工作流程呼叫一次「啟用」API 重設計時(連自己一起),不產生 commit。

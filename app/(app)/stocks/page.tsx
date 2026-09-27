@@ -1,5 +1,6 @@
 import { Suspense } from 'react';
 import FilterBar from '@/components/FilterBar';
+import ConfirmDelete from '@/components/ConfirmDelete';
 import StockTransactionForm from '@/components/StockTransactionForm';
 import { EmptyState, ListRow, SectionHeader } from '@/components/ListRow';
 import { deleteStockTransaction } from '@/app/actions/stocks';
@@ -15,22 +16,44 @@ import {
   ownerIdsForScope,
   parseScope,
 } from '@/lib/queries';
-import { STOCK_TXN_LABEL } from '@/lib/types';
+import type { StockTransaction } from '@/lib/holdings';
+import { STOCK_TXN_LABEL, type AccountBalance, type Stock } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
 
-function DeleteButton({ id }: { id: string }) {
+/** 列表每一列的操作:編輯與兩段式刪除,只有自己的交易才有 */
+function RowActions({
+  txn,
+  stock,
+  brokerAccounts,
+}: {
+  txn: StockTransaction;
+  stock: Stock | undefined;
+  brokerAccounts: AccountBalance[];
+}) {
   return (
-    <form action={deleteStockTransaction}>
-      <input type="hidden" name="id" value={id} />
-      <button
-        type="submit"
-        className="text-xs underline underline-offset-2"
-        style={{ color: 'var(--text-muted)' }}
-      >
-        刪除
-      </button>
-    </form>
+    <span className="inline-flex items-center gap-2">
+      <StockTransactionForm
+        brokerAccounts={brokerAccounts}
+        editing={{
+          id: txn.id,
+          market: stock?.market ?? 'TW',
+          symbol: txn.symbol,
+          name: stock?.name ?? null,
+          type: txn.type,
+          shares: txn.shares,
+          price: txn.price,
+          fee: txn.fee,
+          transaction_date: txn.transaction_date,
+          account_id: txn.account_id ?? null,
+        }}
+      />
+      <ConfirmDelete
+        action={deleteStockTransaction}
+        fields={{ id: txn.id }}
+        what={`這筆${STOCK_TXN_LABEL[txn.type]}`}
+      />
+    </span>
   );
 }
 
@@ -246,7 +269,15 @@ export default async function StocksPage({
                         {showOwner && ` ・ ${memberNames.get(t.owner_id) ?? ''}`}
                       </>
                     }
-                    action={isMine ? <DeleteButton id={t.id} /> : undefined}
+                    action={
+                      isMine ? (
+                        <RowActions
+                          txn={t}
+                          stock={stockMap.get(t.symbol)}
+                          brokerAccounts={brokerAccounts}
+                        />
+                      ) : undefined
+                    }
                   />
                 );
               })}
@@ -307,7 +338,13 @@ export default async function StocksPage({
                           {formatMoney(t.shares * t.price, currency)}
                         </td>
                         <td className="px-5 py-2.5 text-right">
-                          {isMine && <DeleteButton id={t.id} />}
+                          {isMine && (
+                            <RowActions
+                              txn={t}
+                              stock={stockMap.get(t.symbol)}
+                              brokerAccounts={brokerAccounts}
+                            />
+                          )}
                         </td>
                       </tr>
                     );

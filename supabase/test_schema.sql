@@ -68,4 +68,29 @@ insert into public.account_transactions (account_id, type, amount, transaction_d
 values ('aaaaaaaa-0000-0000-0000-000000000001','deposit', -100, '2026-04-01');
 rollback to sp2;
 
+
+\echo '--- 11. 休市日:同一市場同一天只能一筆 ---'
+insert into public.market_holidays (market, holiday_date, name) values ('TW', '2026-09-25', '中秋節');
+savepoint sp3;
+insert into public.market_holidays (market, holiday_date, name) values ('TW', '2026-09-25', '重複');
+rollback to sp3;
+select count(*) as "休市日筆數(應為1)" from public.market_holidays where holiday_date = '2026-09-25';
+
+\echo '--- 12. 新增過去的交易 → 記下待重算的日期 ---'
+delete from public.snapshot_rebuild_requests;
+insert into public.stock_transactions (id, owner_id, symbol, type, shares, price, fee, transaction_date)
+values ('bbbbbbbb-0000-0000-0000-000000000003','11111111-1111-1111-1111-111111111111','2330','buy', 100, 600, 85, '2026-05-04');
+select from_date as "待重算起點(應為2026-05-04)" from public.snapshot_rebuild_requests;
+
+\echo '--- 13. 把交易日期改晚:起點取新舊兩個日期中較早的,不會被改晚 ---'
+update public.stock_transactions set transaction_date = '2026-06-01' where id = 'bbbbbbbb-0000-0000-0000-000000000003';
+select from_date as "待重算起點(應仍為2026-05-04)" from public.snapshot_rebuild_requests;
+
+\echo '--- 14. 更早的變動會把起點往前推,而且一個家庭只有一筆 ---'
+delete from public.snapshot_rebuild_requests;
+insert into public.account_transactions (account_id, type, amount, transaction_date)
+values ('aaaaaaaa-0000-0000-0000-000000000001','deposit', 500, '2026-03-01');
+delete from public.stock_transactions where id = 'bbbbbbbb-0000-0000-0000-000000000003';
+select count(*) as "筆數(應為1)", min(from_date) as "起點(應為2026-03-01)" from public.snapshot_rebuild_requests;
+
 rollback;

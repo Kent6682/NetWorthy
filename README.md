@@ -52,6 +52,14 @@
 
 5. 進入 **Authentication → Providers → Email**,確認 Email 登入是開啟的
    - 如果不想每次註冊都要收驗證信,可以把 **Confirm email** 關掉(家用建議關掉)
+6. 「忘記密碼」要用到的設定(部署到 Vercel、知道網址之後再回來設):
+   - **Authentication → URL Configuration**:**Site URL** 填正式網址(例如 `https://networthy.vercel.app`),
+     **Redirect URLs** 加上 `https://你的網址/auth/callback`。沒加的話,重設信的連結會被 Supabase 擋掉。
+   - **Authentication → Emails → Reset Password**(建議):把範本裡的連結改成
+     `{{ .SiteURL }}/auth/callback?token_hash={{ .TokenHash }}&type=recovery&next=/auth/reset-password`。
+     預設範本的連結只能在「申請重設的同一個瀏覽器」打開;改成這個格式之後,手機上用郵件 App 點開也能用。
+   - Supabase 內建的寄信服務有很低的寄送上限,而且可能只寄給專案成員的信箱。家人收不到重設信的話,
+     到 **Project Settings → Authentication → SMTP Settings** 設定自己的寄信服務(例如 Gmail 應用程式密碼或 Resend)。
 
 ### 2. 推上 GitHub
 

@@ -339,6 +339,73 @@ create unique index if not exists uniq_snapshot
 create index if not exists idx_snapshot_date
   on public.daily_net_worth_snapshots(household_id, snapshot_date);
 
+-- ----------------------------------------------------------------------------
+-- 快照待重算清單 — 交易一有變動就記下「從哪天開始要重算」
+--
+-- 快照是衍生資料,每日同步平常只重算今天與昨天。新增一筆日期在過去的交易、
+-- 或是編輯、刪除舊交易之後,那天到今天的快照都會停在舊值 —— 以前要手動跑回填。
+--
+-- 現在由觸發器記下每個家庭最早受影響的日期,下一次每日同步看到就從那天重算,
+-- 算完再清掉。記錄的是「最早」的日期,多次變動會合併成一筆,不會越積越多。
+--
+-- 沒有任何 policy:使用者讀不到也寫不了,只有觸發器(security definer)
+-- 與同步腳本(service_role)碰得到。
+-- ----------------------------------------------------------------------------
+create table if not exists public.snapshot_rebuild_requests (
+  household_id uuid primary key references public.households(id) on delete cascade,
+  from_date    date not null,
+  requested_at timestamptz not null default now()
+);
+
+create or replace function public.request_snapshot_rebuild()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_owner     uuid;
+  v_date      date;
+  v_household uuid;
+begin
+  -- DELETE 時 new 是 null、INSERT 時 old 是 null;UPDATE 取新舊兩個日期中較早的
+  if tg_table_name = 'stock_transactions' then
+    v_owner := coalesce(new.owner_id, old.owner_id);
+  else
+    select a.owner_id into v_owner
+    from public.accounts a
+    where a.id = coalesce(new.account_id, old.account_id);
+  end if;
+
+  v_date := least(new.transaction_date, old.transaction_date);
+
+  select p.household_id into v_household from public.profiles p where p.id = v_owner;
+
+  -- 帳戶整個被刪除時(cascade)找不到擁有者,那些快照會在下一次回填時處理
+  if v_household is null or v_date is null then
+    return null;
+  end if;
+
+  insert into public.snapshot_rebuild_requests (household_id, from_date, requested_at)
+  values (v_household, v_date, now())
+  on conflict (household_id) do update
+    set from_date    = least(snapshot_rebuild_requests.from_date, excluded.from_date),
+        requested_at = now();
+
+  return null;
+end;
+$$;
+
+drop trigger if exists trg_rebuild_stock on public.stock_transactions;
+create trigger trg_rebuild_stock
+  after insert or update or delete on public.stock_transactions
+  for each row execute function public.request_snapshot_rebuild();
+
+drop trigger if exists trg_rebuild_account on public.account_transactions;
+create trigger trg_rebuild_account
+  after insert or update or delete on public.account_transactions
+  for each row execute function public.request_snapshot_rebuild();
+
 -- ============================================================================
 -- 6. Row Level Security
 --    讀:同一家庭的成員都看得到(支援首頁「全家」視角)
@@ -356,6 +423,7 @@ alter table public.fx_rates                  enable row level security;
 alter table public.market_symbols            enable row level security;
 alter table public.market_holidays           enable row level security;
 alter table public.daily_net_worth_snapshots enable row level security;
+alter table public.snapshot_rebuild_requests enable row level security;
 
 -- households ------------------------------------------------------------------
 drop policy if exists households_select on public.households;
@@ -508,6 +576,7 @@ $$;
 -- 觸發器的執行權限在建立時就檢查完畢,收回後觸發器照常運作
 revoke all on function public.handle_new_user()   from public, anon, authenticated;
 revoke all on function public.sync_broker_cash()  from public, anon, authenticated;
+revoke all on function public.request_snapshot_rebuild() from public, anon, authenticated;
 
 -- RLS 政策的輔助函式 — 政策評估時由登入者的角色呼叫,所以 authenticated 需要保留
 revoke all on function public.current_household_id()  from public, anon;

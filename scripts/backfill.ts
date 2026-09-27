@@ -17,6 +17,7 @@ import { pathToFileURL } from 'node:url';
 import { db, explainWriteError } from './db.ts';
 import { carryForward, computeSnapshotRows, eachDay } from '../lib/snapshots.ts';
 import {
+  clearRebuildRequests,
   clearSnapshotsOutside,
   loadSnapshotSources,
   replaceSnapshots,
@@ -65,6 +66,7 @@ function earliestDate(dates: string[]): string | null {
 async function main() {
   log(`=== 歷史回填(至 ${today},台北時間)===\n`);
 
+  const startedAt = new Date().toISOString();
   const sources = await loadSnapshotSources();
   if (!sources) {
     log('還沒有設定家庭的使用者,沒有東西可以回填');
@@ -184,6 +186,8 @@ async function main() {
    */
   await clearSnapshotsOutside(from, today);
   await replaceSnapshots(days, rows);
+  // 整段都重算過了,觸發器記下的待重算清單也一併清掉
+  await clearRebuildRequests(startedAt);
   log(`  ${days.length} 天 × ${sources.profiles.length} 位成員 + 家庭合計 = ${rows.length} 列`);
   log(`  ${from} 之前與 ${today} 之後的舊快照已清除`);
 

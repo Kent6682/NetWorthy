@@ -21,6 +21,8 @@ export interface StockTransaction {
   fee: number;
   transaction_date: string; // YYYY-MM-DD
   created_at?: string;
+  /** 連動的券商帳戶;均價計算用不到,編輯表單要帶入 */
+  account_id?: string | null;
 }
 
 export interface Holding {

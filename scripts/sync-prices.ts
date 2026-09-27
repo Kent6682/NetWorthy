@@ -9,10 +9,10 @@
  */
 
 import { pathToFileURL } from 'node:url';
-import { db, explainWriteError } from './db.ts';
-import { computeSnapshotRows } from '../lib/snapshots.ts';
+import { db, explainWriteError, selectAll } from './db.ts';
+import { computeSnapshotRows, eachDay } from '../lib/snapshots.ts';
 import { buildPriceLookup, previousDay } from '../lib/pnl.ts';
-import { loadSnapshotSources, replaceSnapshots } from './snapshot-data.ts';
+import { clearRebuildRequests, loadSnapshotSources, replaceSnapshots } from './snapshot-data.ts';
 import {
   fetchTpexCloses,
   fetchTwQuote,
@@ -277,24 +277,56 @@ function shiftDays(date: string, delta: number): string {
  * 也因為要重算過去的日子,這裡不能用 latest_stock_prices(每檔只有最新一天),
  * 必須依日期查價。
  */
+/**
+ * 交易有變動時,觸發器會在 snapshot_rebuild_requests 記下最早受影響的日期
+ * (見 schema.sql)。回傳所有家庭裡最早的那一天,沒有就是 null。
+ */
+async function pendingRebuildFrom(): Promise<string | null> {
+  const { data, error } = await db()
+    .from('snapshot_rebuild_requests')
+    .select('from_date')
+    .order('from_date')
+    .limit(1);
+  if (error) throw new Error(`讀取待重算清單失敗:${error.message}`);
+  return (data?.[0]?.from_date as string | undefined) ?? null;
+}
+
 async function rebuildSnapshots(usdToTwd: number): Promise<number> {
+  const startedAt = new Date().toISOString();
+
   const sources = await loadSnapshotSources();
   if (!sources) {
     log('快照:還沒有設定家庭的使用者,跳過');
     return 0;
   }
 
-  const days = [previousDay(today), today];
-  const since = shiftDays(days[0], -PRICE_LOOKBACK_DAYS);
+  /*
+   * 平常重算今天與昨天(證交所常常晚公布收盤價,昨天那班可能用舊價格算的)。
+   * 有人補登、編輯或刪除了更早的交易時,從那一天開始重算 —— 不用再手動回填。
+   */
+  const yesterday = previousDay(today);
+  const requested = await pendingRebuildFrom();
+  const from = requested && requested < yesterday ? requested : yesterday;
+  const days = eachDay(from, today);
+  const since = shiftDays(from, -PRICE_LOOKBACK_DAYS);
 
-  const { data: priceRows } = await db()
-    .from('stock_price_history')
-    .select('symbol, price_date, close_price')
-    .gte('price_date', since)
-    .lte('price_date', today);
+  if (from < yesterday) log(`快照:有交易變動,從 ${from} 開始重算`);
+
+  // 重算的區間可能長達好幾個月,價格要分頁撈完
+  const priceRows = await selectAll<{ symbol: string; price_date: string; close_price: number }>(
+    (a, b) =>
+      db()
+        .from('stock_price_history')
+        .select('symbol, price_date, close_price')
+        .gte('price_date', since)
+        .lte('price_date', today)
+        .order('price_date')
+        .order('symbol')
+        .range(a, b)
+  );
 
   const priceAt = buildPriceLookup(
-    (priceRows ?? []).map((p) => ({
+    priceRows.map((p) => ({
       symbol: p.symbol as string,
       price_date: p.price_date as string,
       close_price: Number(p.close_price),
@@ -332,9 +364,10 @@ async function rebuildSnapshots(usdToTwd: number): Promise<number> {
   );
 
   await replaceSnapshots(days, rows);
+  await clearRebuildRequests(startedAt);
 
   log(
-    `快照:重算 ${days[0]} 與 ${days[1]},寫入 ${rows.length} 列` +
+    `快照:重算 ${days[0]} 到 ${days[days.length - 1]}(${days.length} 天),寫入 ${rows.length} 列` +
       `(${sources.profiles.length} 位成員 + 家庭合計)`
   );
   return rows.length;

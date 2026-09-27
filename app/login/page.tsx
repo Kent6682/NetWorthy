@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useActionState, useState } from 'react';
 import { signIn, signUp } from '@/app/actions/auth';
 import type { AuthResult } from '@/lib/types';
@@ -68,6 +69,15 @@ export default function LoginPage() {
                 <p className="mt-1.5 text-xs" style={{ color: 'var(--text-muted)' }}>
                   至少 8 個字元
                 </p>
+              )}
+              {mode === 'signin' && (
+                <Link
+                  href="/auth/forgot-password"
+                  className="mt-1.5 inline-block text-xs underline underline-offset-2"
+                  style={{ color: 'var(--text-secondary)' }}
+                >
+                  忘記密碼?
+                </Link>
               )}
             </div>
 

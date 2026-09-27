@@ -3,7 +3,7 @@
 import { useActionState, useEffect, useRef, useState } from 'react';
 import NumberInput from '@/components/NumberInput';
 import Sheet from '@/components/Sheet';
-import { addStockTransaction } from '@/app/actions/stocks';
+import { addStockTransaction, updateStockTransaction } from '@/app/actions/stocks';
 import { estimateTwFee } from '@/lib/fees';
 import { formatNumber, formatNumberInput, parseNumberInput, todayInTaipei } from '@/lib/format';
 import type { AccountBalance } from '@/lib/types';
@@ -25,31 +25,71 @@ const TYPES: { key: StockTxnType; label: string; hint: string }[] = [
   },
 ];
 
+/** 編輯模式要帶進來的那一筆 */
+export interface EditingStockTxn {
+  id: string;
+  market: 'TW' | 'US';
+  symbol: string;
+  name: string | null;
+  type: StockTxnType;
+  shares: number;
+  price: number;
+  fee: number;
+  transaction_date: string;
+  account_id: string | null;
+}
+
+/**
+ * 新增與編輯共用同一份表單。
+ *
+ * 傳入 `editing` 就是編輯模式:觸發按鈕變成列表上的「編輯」小字,欄位帶入原本的值,
+ * 送出改呼叫 updateStockTransaction。手續費視為「使用者填過的」,不會被自動估算蓋掉。
+ */
 export default function StockTransactionForm({
   brokerAccounts,
+  editing,
 }: {
   brokerAccounts: AccountBalance[];
+  editing?: EditingStockTxn;
 }) {
   const [open, setOpen] = useState(false);
-  const [type, setType] = useState<StockTxnType>('buy');
-  const [linkAccount, setLinkAccount] = useState(true);
+  const [type, setType] = useState<StockTxnType>(editing?.type ?? 'buy');
+  const [linkAccount, setLinkAccount] = useState(editing ? editing.account_id !== null : true);
   const formRef = useRef<HTMLFormElement>(null);
 
   // 代號與名稱改成受控,才有辦法在選了建議之後把名稱自動帶進去
-  const [market, setMarket] = useState<'TW' | 'US'>('TW');
-  const [symbol, setSymbol] = useState('');
-  const [name, setName] = useState('');
+  const [market, setMarket] = useState<'TW' | 'US'>(editing?.market ?? 'TW');
+  const [symbol, setSymbol] = useState(editing?.symbol ?? '');
+  const [name, setName] = useState(editing?.name ?? '');
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [suggestOpen, setSuggestOpen] = useState(false);
   const [highlight, setHighlight] = useState(-1);
 
   // 手續費要跟著股數、價格、代號、日期自動算,所以這幾個也改成受控
-  const [shares, setShares] = useState('');
-  const [price, setPrice] = useState('');
-  const [date, setDate] = useState(todayInTaipei);
-  const [fee, setFee] = useState('');
-  // 使用者自己改過手續費之後就不再自動覆蓋,直到按「改回自動計算」
-  const [feeEdited, setFeeEdited] = useState(false);
+  const [shares, setShares] = useState(editing ? formatNumberInput(String(editing.shares)) : '');
+  const [price, setPrice] = useState(editing ? String(editing.price) : '');
+  const [date, setDate] = useState(editing?.transaction_date ?? todayInTaipei());
+  const [fee, setFee] = useState(editing ? formatNumberInput(String(editing.fee), 2) : '');
+  // 使用者自己改過手續費之後就不再自動覆蓋,直到按「改回自動計算」。
+  // 編輯時原本的手續費就是使用者填的,一開始就視為改過
+  const [feeEdited, setFeeEdited] = useState(editing !== undefined);
+
+  /** 編輯模式每次打開都從原始資料重來,不留上次沒存的修改 */
+  function openSheet() {
+    if (editing) {
+      setType(editing.type);
+      setLinkAccount(editing.account_id !== null);
+      setMarket(editing.market);
+      setSymbol(editing.symbol);
+      setName(editing.name ?? '');
+      setShares(formatNumberInput(String(editing.shares)));
+      setPrice(String(editing.price));
+      setDate(editing.transaction_date);
+      setFee(formatNumberInput(String(editing.fee), 2));
+      setFeeEdited(true);
+    }
+    setOpen(true);
+  }
 
   const estimate =
     market === 'TW' && type !== 'initial'
@@ -62,11 +102,15 @@ export default function StockTransactionForm({
   }, [autoFee, feeEdited]);
 
   const [state, formAction, pending] = useActionState(
-    addStockTransaction,
+    editing ? updateStockTransaction : addStockTransaction,
     null as { error?: string; ok?: boolean } | null
   );
 
   useEffect(() => {
+    if (state?.ok && editing) {
+      setOpen(false);
+      return;
+    }
     if (state?.ok) {
       formRef.current?.reset();
       // reset() 清不掉受控欄位,自己來
@@ -81,6 +125,7 @@ export default function StockTransactionForm({
       setSuggestOpen(false);
       setOpen(false);
     }
+    // editing 在同一個元件的生命週期內不會變,只需要跟著 state 跑
   }, [state]);
 
   /*
@@ -142,23 +187,35 @@ export default function StockTransactionForm({
     }
   }
 
+  const formId = `stock-txn-form-${editing?.id ?? 'new'}`;
   const activeType = TYPES.find((t) => t.key === type)!;
   const isInitial = type === 'initial';
 
   return (
     <>
-      <button type="button" className="btn btn-primary" onClick={() => setOpen(true)}>
-        新增交易
-      </button>
+      {editing ? (
+        <button
+          type="button"
+          onClick={openSheet}
+          className="min-h-[32px] px-1 text-xs underline underline-offset-2"
+          style={{ color: 'var(--text-muted)' }}
+        >
+          編輯
+        </button>
+      ) : (
+        <button type="button" className="btn btn-primary" onClick={openSheet}>
+          新增交易
+        </button>
+      )}
 
       <Sheet
         open={open}
         onClose={() => setOpen(false)}
-        title="新增股票交易"
+        title={editing ? '編輯股票交易' : '新增股票交易'}
         footer={
           <button
             type="submit"
-            form="stock-txn-form"
+            form={formId}
             className="btn btn-primary w-full"
             disabled={pending}
           >
@@ -166,7 +223,8 @@ export default function StockTransactionForm({
           </button>
         }
       >
-        <form id="stock-txn-form" ref={formRef} action={formAction}>
+        <form id={formId} ref={formRef} action={formAction}>
+          {editing && <input type="hidden" name="id" value={editing.id} />}
           {/* 交易類型 */}
           <div className="grid grid-cols-3 gap-2">
             {TYPES.map((t) => (
@@ -415,7 +473,13 @@ export default function StockTransactionForm({
                       你還沒有券商虛擬帳戶。請先到「帳戶」頁新增一個,或取消上面的勾選。
                     </p>
                   ) : (
-                    <select id="account_id" name="account_id" className="field" required>
+                    <select
+                      id="account_id"
+                      name="account_id"
+                      className="field"
+                      defaultValue={editing?.account_id ?? undefined}
+                      required
+                    >
                       {brokerAccounts.map((a) => (
                         <option key={a.account_id} value={a.account_id}>
                           {a.institution}
@@ -427,6 +491,13 @@ export default function StockTransactionForm({
                 </div>
               )}
             </div>
+          )}
+
+          {editing && (
+            <p className="mt-4 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+              儲存後持股、均價、已實現損益與券商帳戶餘額會立刻重算。
+              交易日期在昨天以前的話,趨勢圖與日曆會在下一次每日同步時自動重算。
+            </p>
           )}
 
           {state?.error && (

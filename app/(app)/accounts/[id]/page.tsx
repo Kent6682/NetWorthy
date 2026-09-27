@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import AccountTransactionForm from '@/components/AccountTransactionForm';
 import { EmptyState, ListRow, SectionHeader } from '@/components/ListRow';
+import ConfirmDelete from '@/components/ConfirmDelete';
 import { deleteAccountTransaction } from '@/app/actions/accounts';
 import { createClient } from '@/lib/supabase/server';
 import { formatDate, formatMoney } from '@/lib/format';
@@ -53,17 +54,11 @@ export default async function AccountDetailPage({
 
   function DeleteButton({ txnId }: { txnId: string }) {
     return (
-      <form action={deleteAccountTransaction}>
-        <input type="hidden" name="id" value={txnId} />
-        <input type="hidden" name="account_id" value={id} />
-        <button
-          type="submit"
-          className="text-xs underline underline-offset-2"
-          style={{ color: 'var(--text-muted)' }}
-        >
-          刪除
-        </button>
-      </form>
+      <ConfirmDelete
+        action={deleteAccountTransaction}
+        fields={{ id: txnId, account_id: id }}
+        what="這筆收支"
+      />
     );
   }
 

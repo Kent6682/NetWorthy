@@ -86,11 +86,15 @@ export async function clearSnapshotsOutside(from: string, to: string): Promise<v
 export async function replaceSnapshots(dates: string[], rows: SnapshotRow[]): Promise<void> {
   if (dates.length === 0) return;
 
-  const { error: deleteError } = await db()
-    .from('daily_net_worth_snapshots')
-    .delete()
-    .in('snapshot_date', dates);
-  if (deleteError) throw explainWriteError(deleteError, '清除既有快照');
+  // 日期放在網址參數裡,幾百天一次送會太長;每批 100 天
+  const DATE_CHUNK = 100;
+  for (let i = 0; i < dates.length; i += DATE_CHUNK) {
+    const { error: deleteError } = await db()
+      .from('daily_net_worth_snapshots')
+      .delete()
+      .in('snapshot_date', dates.slice(i, i + DATE_CHUNK));
+    if (deleteError) throw explainWriteError(deleteError, '清除既有快照');
+  }
 
   if (rows.length === 0) return;
 
@@ -102,4 +106,16 @@ export async function replaceSnapshots(dates: string[], rows: SnapshotRow[]): Pr
       .insert(rows.slice(i, i + CHUNK));
     if (error) throw explainWriteError(error, '寫入快照');
   }
+}
+
+/**
+ * 算完之後清掉待重算清單。只清「開跑之前」提出的 ——
+ * 同步跑到一半時又有人改了交易,那一筆要留給下一次。
+ */
+export async function clearRebuildRequests(startedAt: string): Promise<void> {
+  const { error } = await db()
+    .from('snapshot_rebuild_requests')
+    .delete()
+    .lte('requested_at', startedAt);
+  if (error) throw explainWriteError(error, '清除待重算清單');
 }
