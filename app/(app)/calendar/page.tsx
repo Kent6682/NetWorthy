@@ -18,6 +18,7 @@ import {
   type DailyPnl,
 } from '@/lib/pnl';
 import {
+  getHolidays,
   getPricesInRange,
   getSession,
   getSnapshotRange,
@@ -65,17 +66,24 @@ export default async function CalendarPage({
   const first = monthDays[0];
   const last = monthDays[monthDays.length - 1];
 
-  const [snapshots, trades, tradingDays] = await Promise.all([
+  const [snapshots, trades, tradingDays, holidays] = await Promise.all([
     // 多要前一天,才算得出當月第一天的盈虧
     getSnapshotRange(scope, session.userId, previousDay(first), last),
     getStockTradesInRange(ownerIds, first, last),
     getTradingDays(first, last),
+    getHolidays(first, last),
   ]);
 
   // 盈虧看的是股票市值,不是總資產 —— 詳見 lib/pnl.ts 的說明
   const stockByDate = new Map(snapshots.map((s) => [s.snapshot_date, Number(s.stock_twd)]));
 
-  const rows = computeDailyPnl(stockByDate, groupTradesByDate(trades), days, tradingDays);
+  const rows = computeDailyPnl(
+    stockByDate,
+    groupTradesByDate(trades),
+    days,
+    tradingDays,
+    new Set(holidays.keys())
+  );
   const byDate = new Map<string, DailyPnl>(rows.map((r) => [r.date, r]));
 
   // 選了某一天才去撈明細要用的資料
@@ -118,6 +126,7 @@ export default async function CalendarPage({
         scope={scope}
         total={monthTotal(rows)}
         selectedDay={selectedDay}
+        holidays={holidays}
       />
 
       {detail && (

@@ -102,7 +102,9 @@ export function computeDailyPnl(
   stockByDate: Map<string, number>,
   tradesByDate: Map<string, DayTrades>,
   days: string[],
-  tradingDays?: Set<string>
+  tradingDays?: Set<string>,
+  /** 證交所公告的休市日。有這份就不用猜,未來的假日也標得出來 */
+  holidays?: ReadonlySet<string>
 ): DailyPnl[] {
   /*
    * 已知報價涵蓋到哪一天。這條界線把「休市」跟「報價還沒到」分開:
@@ -128,13 +130,15 @@ export function computeDailyPnl(
      * 沒有快照的日子是未來,兩種都不是。
      */
     const hasSnapshot = stock !== undefined;
+    const holiday = holidays?.has(date) ?? false;
     const closed =
-      hasSnapshot &&
-      latestTradingDay !== undefined &&
-      date <= latestTradingDay &&
-      !tradingDays!.has(date);
+      holiday ||
+      (hasSnapshot &&
+        latestTradingDay !== undefined &&
+        date <= latestTradingDay &&
+        !tradingDays!.has(date));
     const pending =
-      hasSnapshot && latestTradingDay !== undefined && date > latestTradingDay;
+      !holiday && hasSnapshot && latestTradingDay !== undefined && date > latestTradingDay;
 
     const base = {
       date,
@@ -358,4 +362,17 @@ export function monthTotal(rows: DailyPnl[]): { pnl: number; days: number } {
     days += 1;
   }
   return { pnl, days };
+}
+
+/**
+ * 日曆格子放得下的節日名稱。完整名稱放在滑鼠提示裡。
+ *
+ *   孔子誕辰紀念日/教師節              → 教師節
+ *   臺灣光復暨金門古寧頭大捷紀念日      → 臺灣光復
+ *   市場無交易,僅辦理結算交割作業      → 休市
+ */
+export function holidayLabel(name: string): string {
+  if (name.includes('市場無交易')) return '休市';
+  const last = name.split('/').at(-1)!.trim();
+  return last.split('暨')[0].trim() || name;
 }

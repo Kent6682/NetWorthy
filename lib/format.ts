@@ -60,3 +60,29 @@ export function formatDate(value: string): string {
 export function todayInTaipei(): string {
   return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Taipei' });
 }
+
+/**
+ * 輸入框用的千分位:使用者邊打邊加逗號。
+ *
+ * 跟 formatNumber() 不同,這裡要保留使用者正在打的狀態 ——
+ * 結尾的小數點(「12.」)與小數位數都原樣留著,否則打到一半就被吃掉。
+ */
+export function formatNumberInput(raw: string, maxDecimals = 4): string {
+  const cleaned = raw.replace(/[^\d.]/g, '');
+  const dot = cleaned.indexOf('.');
+  const intRaw = dot === -1 ? cleaned : cleaned.slice(0, dot);
+  const decimals = dot === -1 ? null : cleaned.slice(dot + 1).replace(/\./g, '').slice(0, maxDecimals);
+
+  // 去掉開頭多餘的 0,但留一個(「0.5」)
+  const intPart = intRaw.replace(/^0+(?=\d)/, '');
+  const grouped = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+
+  if (decimals === null || maxDecimals === 0) return grouped;
+  return `${grouped || '0'}.${decimals}`;
+}
+
+/** 把帶千分位的輸入轉回數字;空字串回 NaN */
+export function parseNumberInput(text: string): number {
+  const cleaned = text.replace(/,/g, '').trim();
+  return cleaned === '' ? NaN : Number(cleaned);
+}

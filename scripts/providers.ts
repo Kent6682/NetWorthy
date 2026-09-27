@@ -188,6 +188,44 @@ export async function fetchTwSymbols(): Promise<SymbolRow[]> {
 }
 
 // ---------------------------------------------------------------------------
+// 台股 — 休市日
+// ---------------------------------------------------------------------------
+
+const TWSE_HOLIDAY_URL = 'https://openapi.twse.com.tw/v1/holidaySchedule/holidaySchedule';
+
+interface TwseHolidayRow {
+  Name?: string;
+  Date?: string;
+}
+
+export interface HolidayRow {
+  market: 'TW' | 'US';
+  holiday_date: string;
+  name: string;
+}
+
+/**
+ * 證交所的當年度市場行事曆。
+ *
+ * 這份行事曆除了休市日,還列了「國曆新年開始交易日」「農曆春節前最後交易日」
+ * 這種**有開盤**的日子,名稱都以「交易日」結尾,要濾掉。
+ * 春節前那兩天「市場無交易,僅辦理結算交割作業」沒有交易,要留著。
+ */
+export async function fetchTwHolidays(): Promise<HolidayRow[]> {
+  const rows = await fetchJson<TwseHolidayRow[]>(TWSE_HOLIDAY_URL);
+  const found = new Map<string, HolidayRow>();
+
+  for (const row of rows) {
+    const date = rocToIso(String(row.Date ?? ''));
+    const name = (row.Name ?? '').replace(/\s*\/\s*/g, '/').trim();
+    if (!date || !name || name.endsWith('交易日')) continue;
+    found.set(date, { market: 'TW', holiday_date: date, name });
+  }
+
+  return [...found.values()];
+}
+
+// ---------------------------------------------------------------------------
 // 歷史收盤價(回填用)
 // ---------------------------------------------------------------------------
 

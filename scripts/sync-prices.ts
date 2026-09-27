@@ -16,6 +16,7 @@ import { loadSnapshotSources, replaceSnapshots } from './snapshot-data.ts';
 import {
   fetchTpexCloses,
   fetchTwQuote,
+  fetchTwHolidays,
   fetchTwSymbols,
   fetchTwseCloses,
   fetchUsClose,
@@ -156,7 +157,7 @@ async function syncPrices(): Promise<number> {
 }
 
 // ---------------------------------------------------------------------------
-// 2. 台股代號字典(新增交易時的自動完成用)
+// 2. 台股代號字典(新增交易時的自動完成用)與休市日
 // ---------------------------------------------------------------------------
 
 /** PostgREST 一次吞太大包會被擋,分批送 */
@@ -185,6 +186,30 @@ async function syncSymbols(): Promise<number> {
 
   log(`代號字典:${symbols.length} 檔台股`);
   return symbols.length;
+}
+
+/**
+ * 證交所當年度的休市日。只新增或更新,不刪除 —— 來源某天少回幾筆,
+ * 不該把日曆上已經標好的假日弄掉。跨年後舊年度的資料照樣留著。
+ */
+async function syncHolidays(): Promise<number> {
+  const holidays = await fetchTwHolidays();
+  if (holidays.length === 0) {
+    console.warn('  證交所行事曆沒有回資料,這次跳過');
+    return 0;
+  }
+
+  const stamp = new Date().toISOString();
+  const { error } = await db()
+    .from('market_holidays')
+    .upsert(
+      holidays.map((h) => ({ ...h, updated_at: stamp })),
+      { onConflict: 'market,holiday_date' }
+    );
+  if (error) throw explainWriteError(error, '寫入休市日');
+
+  log(`休市日:${holidays.length} 天`);
+  return holidays.length;
 }
 
 // ---------------------------------------------------------------------------
@@ -329,11 +354,17 @@ async function main() {
    * 代號字典只是新增交易時的便利功能,壞掉不該讓整份同步失敗 ——
    * 價格與快照才是這支腳本真正的職責。
    */
-  log('\n[2/4] 同步台股代號字典');
+  log('\n[2/4] 同步台股代號字典與休市日');
   try {
     await syncSymbols();
   } catch (err) {
     console.warn(`  代號字典同步失敗,不影響其他資料:${(err as Error).message}`);
+  }
+  // 休市日一樣只是日曆的標示,抓不到不影響價格與快照
+  try {
+    await syncHolidays();
+  } catch (err) {
+    console.warn(`  休市日同步失敗,不影響其他資料:${(err as Error).message}`);
   }
 
   log('\n[3/4] 同步匯率');

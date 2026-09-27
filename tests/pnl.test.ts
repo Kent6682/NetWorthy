@@ -11,6 +11,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildPriceLookup,
+  holidayLabel,
   computeDailyPnl,
   computeHoldingPnl,
   daysInMonth,
@@ -476,4 +477,35 @@ test('parseMonth 擋掉不合法的輸入', () => {
   assert.equal(parseMonth('2026-00', '2026-01'), '2026-01');
   assert.equal(parseMonth('abc', '2026-01'), '2026-01');
   assert.equal(parseMonth(undefined, '2026-01'), '2026-01');
+});
+
+test('公告的休市日:不管有沒有快照都標休市,也不會被當成待更新', () => {
+  // 9/25 中秋節;9/28 教師節是今天,快照有了但報價只到 9/24
+  const stock = new Map([
+    ['2026-09-24', 100],
+    ['2026-09-25', 100],
+    ['2026-09-26', 100],
+    ['2026-09-27', 100],
+    ['2026-09-28', 100],
+  ]);
+  const rows = computeDailyPnl(
+    stock,
+    new Map(),
+    ['2026-09-25', '2026-09-28', '2026-10-09'],
+    new Set(['2026-09-24']),
+    new Set(['2026-09-25', '2026-09-28', '2026-10-09'])
+  );
+
+  assert.equal(rows[0].closed, true);
+  assert.equal(rows[1].closed, true, '假日當天不該顯示「待更新」');
+  assert.equal(rows[1].pending, false);
+  assert.equal(rows[2].closed, true, '未來的假日也要標出來');
+  assert.ok(rows.every((r) => r.pnl === null));
+});
+
+test('節日名稱縮短到格子放得下', () => {
+  assert.equal(holidayLabel('中秋節'), '中秋節');
+  assert.equal(holidayLabel('孔子誕辰紀念日/教師節'), '教師節');
+  assert.equal(holidayLabel('臺灣光復暨金門古寧頭大捷紀念日'), '臺灣光復');
+  assert.equal(holidayLabel('市場無交易，僅辦理結算交割作業'), '休市');
 });

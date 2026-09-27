@@ -208,6 +208,20 @@ export async function getTradingDays(from: string, to: string): Promise<Set<stri
   return new Set((data ?? []).map((r) => r.price_date as string));
 }
 
+/** 期間內的台股休市日 → 節日名稱 */
+export async function getHolidays(from: string, to: string): Promise<Map<string, string>> {
+  const supabase = await createClient();
+
+  const { data } = await supabase
+    .from('market_holidays')
+    .select('holiday_date, name')
+    .eq('market', 'TW')
+    .gte('holiday_date', from)
+    .lte('holiday_date', to);
+
+  return new Map((data ?? []).map((r) => [r.holiday_date as string, r.name as string]));
+}
+
 /**
  * 首頁趨勢線資料:個人視角取自己那列,全家視角取 owner_id 為 null 的合計列。
  *

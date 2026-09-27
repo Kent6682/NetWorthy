@@ -1,6 +1,7 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
+import { parseNumberInput } from '@/lib/format';
 import { createClient } from '@/lib/supabase/server';
 
 type Result = { error?: string; ok?: boolean };
@@ -27,9 +28,11 @@ export async function addStockTransaction(_prev: unknown, formData: FormData): P
   const symbol = normalizeSymbol(String(formData.get('symbol') ?? ''), market);
   const name = String(formData.get('name') ?? '').trim() || null;
   const type = String(formData.get('type') ?? '');
-  const shares = Number(formData.get('shares') ?? 0);
-  const price = Number(formData.get('price') ?? 0);
-  const fee = Number(formData.get('fee') ?? 0);
+  // 股數與手續費的輸入框帶千分位,要先拿掉逗號
+  const shares = parseNumberInput(String(formData.get('shares') ?? ''));
+  const price = parseNumberInput(String(formData.get('price') ?? ''));
+  const feeRaw = parseNumberInput(String(formData.get('fee') ?? ''));
+  const fee = Number.isNaN(feeRaw) ? 0 : feeRaw;
   const transactionDate = String(formData.get('transaction_date') ?? '');
   const linkAccount = formData.get('link_account') === 'on';
   const accountIdRaw = String(formData.get('account_id') ?? '');

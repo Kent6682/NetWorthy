@@ -1,9 +1,11 @@
 'use client';
 
 import { useActionState, useEffect, useRef, useState } from 'react';
+import NumberInput from '@/components/NumberInput';
 import Sheet from '@/components/Sheet';
 import { addStockTransaction } from '@/app/actions/stocks';
-import { todayInTaipei } from '@/lib/format';
+import { estimateTwFee } from '@/lib/fees';
+import { formatNumber, formatNumberInput, parseNumberInput, todayInTaipei } from '@/lib/format';
 import type { AccountBalance } from '@/lib/types';
 
 type StockTxnType = 'initial' | 'buy' | 'sell';
@@ -41,6 +43,24 @@ export default function StockTransactionForm({
   const [suggestOpen, setSuggestOpen] = useState(false);
   const [highlight, setHighlight] = useState(-1);
 
+  // 手續費要跟著股數、價格、代號、日期自動算,所以這幾個也改成受控
+  const [shares, setShares] = useState('');
+  const [price, setPrice] = useState('');
+  const [date, setDate] = useState(todayInTaipei);
+  const [fee, setFee] = useState('');
+  // 使用者自己改過手續費之後就不再自動覆蓋,直到按「改回自動計算」
+  const [feeEdited, setFeeEdited] = useState(false);
+
+  const estimate =
+    market === 'TW' && type !== 'initial'
+      ? estimateTwFee(type, symbol, parseNumberInput(shares), parseNumberInput(price), date)
+      : null;
+  const autoFee = estimate ? formatNumberInput(String(estimate.total)) : '';
+
+  useEffect(() => {
+    if (!feeEdited) setFee(autoFee);
+  }, [autoFee, feeEdited]);
+
   const [state, formAction, pending] = useActionState(
     addStockTransaction,
     null as { error?: string; ok?: boolean } | null
@@ -52,6 +72,11 @@ export default function StockTransactionForm({
       // reset() 清不掉受控欄位,自己來
       setSymbol('');
       setName('');
+      setShares('');
+      setPrice('');
+      setFee('');
+      setFeeEdited(false);
+      setDate(todayInTaipei());
       setSuggestions([]);
       setSuggestOpen(false);
       setOpen(false);
@@ -268,14 +293,13 @@ export default function StockTransactionForm({
               <label className="label" htmlFor="shares">
                 股數
               </label>
-              <input
+              <NumberInput
                 id="shares"
                 name="shares"
-                type="number"
-                inputMode="decimal"
-                step="0.0001"
-                min="0.0001"
-                className="field"
+                className="field tnum"
+                maxDecimals={4}
+                value={shares}
+                onChange={setShares}
                 required
               />
             </div>
@@ -292,6 +316,8 @@ export default function StockTransactionForm({
                 step="0.0001"
                 min="0"
                 className="field"
+                value={price}
+                onChange={(e) => setPrice(e.target.value)}
                 required
               />
             </div>
@@ -301,16 +327,43 @@ export default function StockTransactionForm({
                 <label className="label" htmlFor="fee">
                   手續費與稅
                 </label>
-                <input
+                <NumberInput
                   id="fee"
                   name="fee"
-                  type="number"
-                  inputMode="decimal"
-                  step="0.01"
-                  min="0"
-                  className="field"
-                  defaultValue={0}
+                  className="field tnum"
+                  maxDecimals={2}
+                  placeholder={market === 'TW' ? '填完股數與價格會自動帶出' : '0'}
+                  value={fee}
+                  onChange={(v) => {
+                    setFee(v);
+                    setFeeEdited(true);
+                  }}
                 />
+                <p className="mt-1 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+                  {feeEdited && autoFee !== '' && fee !== autoFee ? (
+                    <>
+                      已手動修改 ·{' '}
+                      <button
+                        type="button"
+                        className="underline"
+                        onClick={() => setFeeEdited(false)}
+                      >
+                        改回自動計算 {autoFee}
+                      </button>
+                    </>
+                  ) : estimate ? (
+                    type === 'buy' ? (
+                      <>手續費 0.1425%,未含券商折扣</>
+                    ) : (
+                      <>
+                        手續費 {formatNumber(estimate.fee)} ＋ 證交稅{' '}
+                        {formatNumber(estimate.tax)}({estimate.taxLabel})
+                      </>
+                    )
+                  ) : market === 'US' ? (
+                    <>美股各券商收費不同,請自行填寫</>
+                  ) : null}
+                </p>
               </div>
             )}
 
@@ -323,7 +376,8 @@ export default function StockTransactionForm({
                 name="transaction_date"
                 type="date"
                 className="field"
-                defaultValue={todayInTaipei()}
+                value={date}
+                onChange={(e) => setDate(e.target.value)}
                 required
               />
             </div>

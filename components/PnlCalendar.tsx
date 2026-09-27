@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { formatMoney, formatPercent, formatSignedCompact } from '@/lib/format';
-import { shiftMonth, type DailyPnl } from '@/lib/pnl';
+import { holidayLabel, shiftMonth, type DailyPnl } from '@/lib/pnl';
 
 /**
  * 每日盈虧月曆。
@@ -15,10 +15,12 @@ import { shiftMonth, type DailyPnl } from '@/lib/pnl';
 const WEEKDAYS = ['一', '二', '三', '四', '五'];
 
 /** 滑鼠停留時的完整說明 —— 格子太小,細節放這裡 */
-function describeDay(date: string, row: DailyPnl | undefined): string {
+function describeDay(date: string, row: DailyPnl | undefined, holiday?: string): string {
   const parts: string[] = [date];
 
-  if (row?.closed) {
+  if (holiday) {
+    parts.push(`${holiday},休市`);
+  } else if (row?.closed) {
     parts.push('休市');
   } else if (row?.pending) {
     parts.push('收盤價還沒抓到,等下一次同步');
@@ -60,6 +62,7 @@ export default function PnlCalendar({
   scope,
   total,
   selectedDay,
+  holidays,
 }: {
   month: string;
   weeks: (string | null)[][];
@@ -68,6 +71,8 @@ export default function PnlCalendar({
   scope: string;
   total: { pnl: number; days: number };
   selectedDay?: string;
+  /** 休市日 → 節日名稱 */
+  holidays: Map<string, string>;
 }) {
   const [year, mon] = month.split('-');
   const tail = scope === 'family' ? '&scope=family' : '';
@@ -116,6 +121,7 @@ export default function PnlCalendar({
           }
 
           const row = byDate.get(date);
+          const holiday = holidays.get(date);
           const pnl = row?.pnl ?? null;
           const trades = row?.trades ?? null;
           const imported = (trades?.initial ?? 0) > 0;
@@ -130,9 +136,10 @@ export default function PnlCalendar({
               className="cal-cell"
               data-today={date === today}
               data-selected={date === selectedDay}
+              data-holiday={holiday !== undefined}
               data-tone={tone}
               style={{ '--cal-intensity': intensity } as React.CSSProperties}
-              title={describeDay(date, row)}
+              title={describeDay(date, row, holiday)}
             >
               {trades && (
                 <span className="cal-marks">
@@ -144,7 +151,9 @@ export default function PnlCalendar({
 
               <span className="cal-date">{Number(date.slice(-2))}</span>
 
-              {row?.closed ? (
+              {holiday ? (
+                <span className="cal-holiday">{holidayLabel(holiday)}</span>
+              ) : row?.closed ? (
                 <span className="cal-imported">休市</span>
               ) : row?.pending ? (
                 <span className="cal-imported">待更新</span>
@@ -187,7 +196,8 @@ export default function PnlCalendar({
         已經扣掉當天買賣造成的部位變動 ——
         買進 50 萬不是賺 50 萬,那只是現金換成股票;手續費與稅則算成當天的損失。
         導入既有持股的那天不計盈虧,因為那天你既沒賺也沒賠。
-        空白的日子是沒有資料可比 —— 週末假日沒有交易,或還在第一筆持有起始日之前。
+        國定假日會寫上節日名稱(來自證交所的年度行事曆)。
+        空白的日子是沒有資料可比 —— 還沒到,或還在第一筆持有起始日之前。
       </p>
     </section>
   );

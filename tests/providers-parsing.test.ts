@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import {
   fetchTwseCloses,
   fetchTpexCloses,
+  fetchTwHolidays,
   fetchTwQuote,
   fetchTwSymbols,
   fetchUsdTwd,
@@ -154,6 +155,30 @@ test('代號字典:一邊的來源掛掉,仍然回傳另一邊', async () => {
   const rows = await fetchTwSymbols();
   assert.equal(rows.length, 1, '證交所掛掉時還是要有上櫃的資料');
   assert.equal(rows[0].name, '環球晶');
+});
+
+test('休市日:只留沒有交易的日子,開始/最後交易日要濾掉', async () => {
+  stubJson([
+    { Name: '中華民國開國紀念日', Date: '1150101', Weekday: '四' },
+    // 這兩種有開盤,不是休市日
+    { Name: '國曆新年開始交易日', Date: '1150102', Weekday: '五' },
+    { Name: '農曆春節前最後交易日', Date: '1150211', Weekday: '三' },
+    // 沒有交易、只辦交割,要算休市
+    { Name: '市場無交易，僅辦理結算交割作業', Date: '1150212', Weekday: '四' },
+    { Name: '中秋節', Date: '1150925', Weekday: '五' },
+    { Name: '孔子誕辰紀念日/ 教師節', Date: '1150928', Weekday: '一' },
+  ]);
+
+  const rows = await fetchTwHolidays();
+  const byDate = new Map(rows.map((r) => [r.holiday_date, r.name]));
+
+  assert.deepEqual(
+    [...byDate.keys()].sort(),
+    ['2026-01-01', '2026-02-12', '2026-09-25', '2026-09-28']
+  );
+  assert.equal(byDate.get('2026-09-25'), '中秋節');
+  assert.equal(byDate.get('2026-09-28'), '孔子誕辰紀念日/教師節', '斜線前後的空白要收掉');
+  assert.ok(rows.every((r) => r.market === 'TW'));
 });
 
 /** Yahoo chart 端點的回應形狀 */

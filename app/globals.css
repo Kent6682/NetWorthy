@@ -542,6 +542,22 @@ a.cal-cell:focus-visible {
   line-height: 1;
 }
 
+/* 國定假日:底色退一階,格子裡寫節日名稱(太長就兩行後截斷,完整名稱在滑鼠提示) */
+.cal-cell[data-holiday='true'] {
+  background: var(--surface-sunken);
+}
+
+.cal-holiday {
+  font-size: 0.6875rem;
+  color: var(--text-secondary);
+  line-height: 1.25;
+  text-align: center;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
 /*
  * 幅度用底色深淺表示,強度由 --cal-intensity 帶進來(0～1)。
  * 顏色本身仍然只有紅綠兩種 —— 深淺是輔助,不是另一個維度。
