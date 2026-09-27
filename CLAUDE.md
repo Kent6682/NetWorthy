@@ -10,9 +10,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 npm install
 npm run dev      # http://localhost:3000
 npm run build
-npm test         # node --test,110 多個測試,不連網(但要先 npm install)
+npm test         # node --test,125 個測試,不連網(但要先 npm install)
 npm run sync     # 手動跑一次每日同步(需 SUPABASE_SERVICE_ROLE_KEY)
-npm run backfill # 從第一筆交易重算所有歷史快照(同上,需金鑰)
+npm run backfill # 從第一筆交易重算所有歷史快照並補抓歷史價格(同上,需金鑰)
 ```
 
 跑單一測試檔或單一測試:
@@ -105,7 +105,9 @@ export async function xxx(_prev: unknown, formData: FormData): Promise<{ error?:
 
 **刻意不放 `loading.tsx`。** 曾經每個路由都加過,但那會在伺服器回應前把畫面清空,使用者看到的是一個沒有資訊的空殼 —— 比「畫面還沒動」更難接受。現在改成保留舊內容不動,由 `Nav` 裡的 `PendingDot`(`useLinkStatus`)在被點的分頁上標一個點。要加回骨架前請先確認這個取捨。
 
-頁面內的多筆查詢一律用 `Promise.all` 併發,不要寫成一連串 `await`。換頁慢的根本解法是減少往返與縮短距離(見 `vercel.json` 把函式釘在東京,與 Supabase 同區),不是拿骨架去蓋。
+頁面內的多筆查詢一律用 `Promise.all` 併發,不要寫成一連串 `await`。
+
+**PostgREST 單次最多回 1,000 列,超過的部分無聲截斷。** 日曆一次撈整年(月曆與 12 個月列同一份資料,月合計才保證等於格子加總),所以 `getTradingDays()` 按月切段併發;年度表用 `getMarketDataNear()` 只撈每個年底前 30 天。新增可能變長的查詢時照這兩個模式,腳本端用 `selectAll()`。換頁慢的根本解法是減少往返與縮短距離(見 `vercel.json` 把函式釘在東京,與 Supabase 同區),不是拿骨架去蓋。
 
 `getSession()` 用 React `cache()` 包著:layout 與頁面在同一個請求裡各呼叫一次,沒有這層會讓 `auth.getUser()` 與成員查詢整組跑兩次。新增類似的「每個請求都要用到」的查詢時照這個模式。
 
