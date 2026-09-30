@@ -15,6 +15,8 @@ import { buildPriceLookup, previousDay } from '../lib/pnl.ts';
 import { clearRebuildRequests, loadSnapshotSources, replaceSnapshots } from './snapshot-data.ts';
 import {
   fetchTpexCloses,
+  fetchTpexDaily,
+  fetchTwseDaily,
   fetchTwQuote,
   fetchTwHolidays,
   fetchTwSymbols,
@@ -57,7 +59,118 @@ async function preflight(): Promise<void> {
 // 1. 股價
 // ---------------------------------------------------------------------------
 
-async function syncPrices(): Promise<number> {
+/** 往回找正式收盤價要涵蓋幾個日曆天 —— 排程被 GitHub 跳過一兩班也補得回來 */
+const OFFICIAL_LOOKBACK_DAYS = 6;
+
+/**
+ * 要向交易所要正式收盤價的日子:今天往回幾天,略過週末,新的在前。
+ * 國定假日照樣問 —— 交易所會回空的,多一次請求而已,不必另外查假日表。
+ */
+export function officialPriceDates(today: string, lookback = OFFICIAL_LOOKBACK_DAYS): string[] {
+  const dates: string[] = [];
+  const cursor = new Date(`${today}T00:00:00Z`);
+  for (let i = 0; i <= lookback; i += 1) {
+    const day = cursor.getUTCDay();
+    if (day !== 0 && day !== 6) dates.push(cursor.toISOString().slice(0, 10));
+    cursor.setUTCDate(cursor.getUTCDate() - 1);
+  }
+  return dates;
+}
+
+/**
+ * 台股收盤價,依可信度由高到低:
+ *
+ *   1. 交易所「指定日期」的正式行情(證交所 MI_INDEX、櫃買 dailyQuotes)
+ *      —— 當天收盤後就有。近幾個交易日**每次都重抓**,之前用後備來源先補上的
+ *         價格會被正式價格蓋掉,當日與前日的收盤價因此一定是正式的。
+ *   2. openapi 的全市場檔案 —— 正式價格,但證交所那份要到隔天早上才更新。
+ *   3. Yahoo 逐檔 —— 以上都還沒有今天時才問,而且會略過還在交易中的那一根。
+ *
+ * 同一個「代號 + 日期」只留可信度最高的那一筆。
+ */
+export async function syncTwPrices(
+  twSymbols: string[],
+  put: (r: PriceRow) => void,
+  has: (symbol: string, date: string) => boolean
+): Promise<void> {
+  const board = new Map<string, TwBoard>();
+  const latest = new Map<string, string>();
+  const note = (r: PriceRow, code: TwBoard) => {
+    put(r);
+    board.set(r.symbol, code);
+    if (r.price_date > (latest.get(r.symbol) ?? '')) latest.set(r.symbol, r.price_date);
+  };
+
+  // --- 1. 正式行情,逐日 ---------------------------------------------------
+  const found: string[] = [];
+  for (const date of officialPriceDates(today)) {
+    let count = 0;
+    for (const [name, fetcher, code] of [
+      ['證交所', fetchTwseDaily, 'TW'],
+      ['櫃買中心', fetchTpexDaily, 'TWO'],
+    ] as const) {
+      try {
+        const map = await fetcher(date);
+        for (const symbol of twSymbols) {
+          const row = map.get(symbol);
+          if (row && !has(symbol, date)) {
+            note(row, code);
+            count += 1;
+          }
+        }
+      } catch (err) {
+        console.warn(`  ${name} ${date} 行情抓取失敗:${(err as Error).message}`);
+      }
+      // 證交所大約每 5 秒只接受 3 次請求
+      await sleep(TWSE_GAP_MS);
+    }
+    if (count > 0) found.push(`${date.slice(5)} ${count} 檔`);
+  }
+  log(`  正式收盤價:${found.length > 0 ? found.join('、') : '近幾天都沒有(可能連假)'}`);
+
+  // --- 2. openapi 全市場檔案 ---------------------------------------------
+  for (const [name, fetcher, code] of [
+    ['證交所 openapi', fetchTwseCloses, 'TW'],
+    ['櫃買中心 openapi', fetchTpexCloses, 'TWO'],
+  ] as const) {
+    try {
+      const map = await fetcher();
+      for (const symbol of twSymbols) {
+        const row = map.get(symbol);
+        if (row && !has(symbol, row.price_date)) note(row, code);
+        // 正式行情裡找不到、這裡才找到的,也要記下它是上市還是上櫃
+        if (row && !board.has(symbol)) board.set(symbol, code);
+      }
+    } catch (err) {
+      console.warn(`  ${name} 抓取失敗:${(err as Error).message}`);
+    }
+  }
+
+  // --- 3. Yahoo 逐檔補今天 -------------------------------------------------
+  let patched = 0;
+  for (const symbol of twSymbols) {
+    if ((latest.get(symbol) ?? '') >= today) continue;
+
+    const fresh = await fetchTwQuote(symbol, board.get(symbol));
+    if (fresh && !has(symbol, fresh.price_date)) {
+      put(fresh);
+      if (fresh.price_date > (latest.get(symbol) ?? '')) {
+        latest.set(symbol, fresh.price_date);
+        patched += 1;
+      }
+    } else if (!fresh && !latest.has(symbol)) {
+      console.warn(`  找不到台股 ${symbol} 的報價(可能是新股、已下市,或代號填錯)`);
+    }
+    await sleep(250); // 別打太快
+  }
+  if (patched > 0) log(`  交易所還沒有較新的收盤價,用 Yahoo 暫時補上 ${patched} 檔(下一班會換成正式價格)`);
+}
+
+const TWSE_GAP_MS = 2000;
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/** 寫入的價格裡最早的日期 —— 那天以後的快照要重算;沒寫入任何價格時是 null */
+async function syncPrices(): Promise<string | null> {
   let stocks: { symbol: string; market: string }[];
   try {
     stocks = await selectAll((a, b) =>
@@ -68,7 +181,7 @@ async function syncPrices(): Promise<number> {
   }
   if (stocks.length === 0) {
     log('沒有任何股票需要同步');
-    return 0;
+    return null;
   }
 
   const twSymbols = stocks.filter((s) => s.market === 'TW').map((s) => s.symbol);
@@ -82,60 +195,12 @@ async function syncPrices(): Promise<number> {
    * 主鍵,Postgres 會直接拒絕整批(ON CONFLICT DO UPDATE 不能重複影響同一列)。
    */
   const rows = new Map<string, PriceRow>();
-  const put = (r: PriceRow) => rows.set(`${r.symbol}|${r.price_date}`, r);
+  const key = (symbol: string, date: string) => `${symbol}|${date}`;
+  const put = (r: PriceRow) => rows.set(key(r.symbol, r.price_date), r);
+  const has = (symbol: string, date: string) => rows.has(key(symbol, date));
 
-  // 台股:證交所 + 櫃買中心各一次呼叫,涵蓋所有上市櫃股票
   if (twSymbols.length > 0) {
-    const lookup = new Map<string, PriceRow>();
-    const board = new Map<string, TwBoard>();
-
-    for (const [name, fetcher, code] of [
-      ['證交所', fetchTwseCloses, 'TW'],
-      ['櫃買中心', fetchTpexCloses, 'TWO'],
-    ] as const) {
-      try {
-        const map = await fetcher();
-        for (const [symbol, row] of map) {
-          if (lookup.has(symbol)) continue;
-          lookup.set(symbol, row);
-          board.set(symbol, code);
-        }
-        log(`  ${name}:取得 ${map.size} 檔報價`);
-      } catch (err) {
-        console.warn(`  ${name} 抓取失敗:${(err as Error).message}`);
-      }
-    }
-
-    let patched = 0;
-
-    for (const symbol of twSymbols) {
-      const row = lookup.get(symbol);
-      if (row) put(row);
-
-      /*
-       * 大盤檔案沒更新到今天就逐檔問 Yahoo。
-       *
-       * 證交所的 STOCK_DAY_ALL 實測到台北時間晚上九點還停在前一個交易日,
-       * 只靠它的話,當天的盈虧要等隔天早上那班才補得上。
-       * 今天休市的話 Yahoo 也只會回前一個交易日,跟大盤檔案同一筆,去重後無害。
-       */
-      if (!row || row.price_date < today) {
-        const fresh = await fetchTwQuote(symbol, board.get(symbol));
-
-        if (fresh) {
-          put(fresh);
-          if (fresh.price_date > (row?.price_date ?? '')) patched += 1;
-        } else if (!row) {
-          console.warn(`  找不到台股 ${symbol} 的報價(可能是新股、已下市,或代號填錯)`);
-        }
-
-        await new Promise((r) => setTimeout(r, 250)); // 別打太快
-      }
-    }
-
-    if (patched > 0) {
-      log(`  大盤檔案還沒更新到 ${today},用 Yahoo 補上 ${patched} 檔`);
-    }
+    await syncTwPrices(twSymbols, put, has);
   }
 
   // 美股:逐檔抓,彼此不互相影響
@@ -159,7 +224,10 @@ async function syncPrices(): Promise<number> {
 
   const covered = new Set(priceRows.map((r) => r.symbol)).size;
   log(`股價:${covered} / ${stocks.length} 檔有報價,共寫入 ${priceRows.length} 列`);
-  return priceRows.length;
+  return priceRows.reduce<string | null>(
+    (min, r) => (min === null || r.price_date < min ? r.price_date : min),
+    null
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -297,7 +365,11 @@ async function pendingRebuildFrom(): Promise<string | null> {
   return (data?.[0]?.from_date as string | undefined) ?? null;
 }
 
-async function rebuildSnapshots(usdToTwd: number): Promise<number> {
+async function rebuildSnapshots(
+  usdToTwd: number,
+  /** 這次同步寫入的最早價格日期 —— 價格可能被正式收盤價更正過,那天起的快照要跟著重算 */
+  pricesFrom: string | null
+): Promise<number> {
   const startedAt = new Date().toISOString();
 
   const sources = await loadSnapshotSources();
@@ -307,16 +379,26 @@ async function rebuildSnapshots(usdToTwd: number): Promise<number> {
   }
 
   /*
-   * 平常重算今天與昨天(證交所常常晚公布收盤價,昨天那班可能用舊價格算的)。
-   * 有人補登、編輯或刪除了更早的交易時,從那一天開始重算 —— 不用再手動回填。
+   * 起點取三者中最早的:
+   *   - 昨天:昨天那班可能是在正式收盤價公布前跑的
+   *   - 待重算清單:有人補登、編輯或刪除了更早的交易
+   *   - 這次寫入的最早價格日期:每次都重抓近幾個交易日的正式收盤價,其中可能有
+   *     更正了之前暫用價格的(例如排程被 GitHub 跳過一兩班),那天起的快照要跟著變
    */
   const yesterday = previousDay(today);
   const requested = await pendingRebuildFrom();
-  const from = requested && requested < yesterday ? requested : yesterday;
+  const from = [yesterday, requested, pricesFrom]
+    .filter((d): d is string => d !== null)
+    .reduce((a, b) => (b < a ? b : a));
   const days = eachDay(from, today);
   const since = shiftDays(from, -PRICE_LOOKBACK_DAYS);
 
-  if (from < yesterday) log(`快照:有交易變動,從 ${from} 開始重算`);
+  if (from < yesterday) {
+    log(
+      `快照:從 ${from} 開始重算` +
+        (requested && requested === from ? '(有交易變動)' : '(近幾天的收盤價以正式價格重新寫入)')
+    );
+  }
 
   // 重算的區間可能長達好幾個月,價格要分頁撈完
   const priceRows = await selectAll<{ symbol: string; price_date: string; close_price: number }>(
@@ -392,7 +474,7 @@ async function main() {
   await preflight();
 
   log('\n[1/4] 同步股價');
-  await syncPrices();
+  const pricesFrom = await syncPrices();
 
   /*
    * 代號字典只是新增交易時的便利功能,壞掉不該讓整份同步失敗 ——
@@ -415,7 +497,7 @@ async function main() {
   const usdToTwd = await syncFx();
 
   log('\n[4/4] 重算總資產快照');
-  await rebuildSnapshots(usdToTwd);
+  await rebuildSnapshots(usdToTwd, pricesFrom);
 
   log('\n完成');
 }

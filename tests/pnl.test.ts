@@ -10,7 +10,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  buildDatedPriceLookup,
   buildPriceLookup,
+  incompleteDays,
   holidayLabel,
   computeDailyPnl,
   computeHoldingPnl,
@@ -562,4 +564,81 @@ test('節日名稱縮短到格子放得下', () => {
   assert.equal(holidayLabel('孔子誕辰紀念日/教師節'), '教師節');
   assert.equal(holidayLabel('臺灣光復暨金門古寧頭大捷紀念日'), '臺灣光復');
   assert.equal(holidayLabel('市場無交易，僅辦理結算交割作業'), '休市');
+});
+
+// --- 收盤價還沒到齊的日子 -----------------------------------------------------
+
+/** 2026-09-29 的真實情況:只有 2542 拿到當天價格,三檔 ETF 還停在 9/24 */
+const partialDay = {
+  txns: [
+    stockTxn({ id: 'a', symbol: '00662', shares: 42000, price: 120.5, transaction_date: '2026-05-13' }),
+    stockTxn({ id: 'b', symbol: '00712', shares: 250000, price: 8.94, transaction_date: '2026-05-13' }),
+    stockTxn({ id: 'c', symbol: '2542', shares: 23100, price: 42.7, transaction_date: '2026-05-13' }),
+  ],
+  prices: [
+    { symbol: '00662', price_date: '2026-09-24', close_price: 124.25 },
+    { symbol: '00712', price_date: '2026-09-24', close_price: 7.82 },
+    { symbol: '2542', price_date: '2026-09-24', close_price: 39.5 },
+    { symbol: '2542', price_date: '2026-09-29', close_price: 38.6 },
+  ],
+};
+
+test('持股有任何一檔還沒有當天收盤價,那天就是不完整的', () => {
+  const priced = new Set(partialDay.prices.map((p) => `${p.symbol}|${p.price_date}`));
+  const incomplete = incompleteDays(
+    partialDay.txns,
+    new Set(['2026-09-24', '2026-09-29']),
+    (s, d) => priced.has(`${s}|${d}`),
+    () => true
+  );
+  assert.deepEqual([...incomplete], ['2026-09-29'], '9/24 三檔都有價格,9/29 只有 2542');
+});
+
+test('不完整的日子顯示待更新,不給一個看起來正常的數字', () => {
+  const stock = new Map([
+    ['2026-09-28', 11250950],
+    ['2026-09-29', 11230160], // 只有 2542 用了當天價格算出來的快照
+  ]);
+  const [row] = computeDailyPnl(
+    stock,
+    new Map(),
+    ['2026-09-29'],
+    new Set(['2026-09-24', '2026-09-29']),
+    new Set(['2026-09-28']),
+    new Set(['2026-09-29'])
+  );
+  assert.equal(row.pending, true);
+  assert.equal(row.closed, false);
+  assert.equal(row.pnl, null, '不能顯示 −20,790 這種只算了一檔的數字');
+});
+
+test('美股不參與完整性檢查:台股開盤、美股休市的日子不能永遠卡在待更新', () => {
+  const txns = [stockTxn({ id: 'u', symbol: 'AAPL', shares: 10, price: 100, transaction_date: '2026-01-02' })];
+  const incomplete = incompleteDays(
+    txns,
+    new Set(['2026-11-26']), // 美國感恩節,台股照常開盤
+    () => false,
+    (s) => s !== 'AAPL'
+  );
+  assert.equal(incomplete.size, 0);
+});
+
+test('單日明細標出每檔實際用的是哪一天的收盤價', () => {
+  const lookup = buildDatedPriceLookup(partialDay.prices);
+  const rows = computeHoldingPnl(
+    partialDay.txns,
+    '2026-09-29',
+    (s, d) => lookup(s, d)?.price ?? null,
+    (s, d) => lookup(s, d)?.date ?? null
+  );
+  const bySymbol = new Map(rows.map((r) => [r.symbol, r]));
+
+  assert.equal(bySymbol.get('2542')?.priceDate, '2026-09-29');
+  assert.equal(bySymbol.get('00712')?.priceDate, '2026-09-24', '沿用 9/24,要讓畫面標成未更新');
+  assert.equal(bySymbol.get('00712')?.price, 7.82);
+});
+
+test('沒給價格日期時 priceDate 是 null,舊的呼叫方式照常運作', () => {
+  const rows = computeHoldingPnl(partialDay.txns, '2026-09-29', buildPriceLookup(partialDay.prices));
+  assert.ok(rows.every((r) => r.priceDate === null));
 });

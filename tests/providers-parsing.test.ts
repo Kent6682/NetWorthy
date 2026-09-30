@@ -7,7 +7,11 @@ import { test, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   fetchTwseCloses,
+  fetchTwseDaily,
   fetchTpexCloses,
+  fetchTpexDaily,
+  fetchUsClose,
+  newYorkClock,
   fetchTwHolidays,
   fetchTwQuote,
   fetchTwSymbols,
@@ -292,4 +296,169 @@ test('匯率主來源失敗時退到 Frankfurter', async () => {
 test('兩個匯率來源都失敗時回傳 null', async () => {
   globalThis.fetch = (async () => ({ ok: false, status: 500 }) as unknown as Response) as typeof fetch;
   assert.equal(await fetchUsdTwd(), null);
+});
+
+// --- 指定日期的正式行情 -----------------------------------------------------
+
+test('證交所每日收盤行情:從多張表裡找出個股那張,依欄位名稱取收盤價', async () => {
+  stubJson({
+    stat: 'OK',
+    date: '20260929',
+    tables: [
+      // 大盤指數表:欄位對不上,要略過
+      { fields: ['指數', '收盤指數'], data: [['發行量加權股價指數', '23,456.78']] },
+      {
+        fields: ['證券代號', '證券名稱', '成交股數', '成交筆數', '成交金額', '開盤價', '最高價', '最低價', '收盤價'],
+        data: [
+          ['00712', '復華富時不動產', '1', '1', '1', '7.8', '7.8', '7.5', '7.56'],
+          ['2542', '興富發', '1', '1', '1', '39', '39', '38', '38.60'],
+          ['2330', '台積電', '1', '1', '1', '1,230', '1,240', '1,220', '1,235.00'],
+          // 當天沒成交:收盤價是 --,不能記成 0
+          ['9999', '沒成交', '0', '0', '0', '--', '--', '--', '--'],
+        ],
+      },
+    ],
+  });
+
+  const map = await fetchTwseDaily('2026-09-29');
+  assert.equal(map.get('00712')?.close_price, 7.56);
+  assert.equal(map.get('2542')?.price_date, '2026-09-29');
+  assert.equal(map.get('2330')?.close_price, 1235, '千分位要去掉');
+  assert.equal(map.has('9999'), false);
+  assert.equal(map.size, 3);
+});
+
+test('證交所每日收盤行情:沒開盤的日子是空的', async () => {
+  stubJson({ stat: '很抱歉,沒有符合條件的資料!' });
+  assert.equal((await fetchTwseDaily('2026-09-28')).size, 0);
+});
+
+test('交易所回的日期跟要求的不一樣時整份不用,不能把別天的價格記成這一天', async () => {
+  stubJson({
+    stat: 'OK',
+    date: '20260924',
+    tables: [
+      {
+        fields: ['證券代號', '證券名稱', '收盤價'],
+        data: [['00712', '復華富時不動產', '7.82']],
+      },
+    ],
+  });
+  assert.equal((await fetchTwseDaily('2026-09-29')).size, 0);
+});
+
+test('櫃買上櫃股票行情:代號與收盤欄位,代號前後空白去掉', async () => {
+  stubJson({
+    stat: 'ok',
+    date: '20260929',
+    tables: [
+      {
+        fields: ['代號', '名稱', '收盤', '漲跌', '開盤'],
+        data: [
+          ['00687B', '國泰20年美債', '25.67', '-0.61 ', '25.95'],
+          [' 6488 ', '環球晶', '945.00', '-3.00', '940'],
+        ],
+      },
+      { fields: ['代號', '名稱', '收盤'], data: [] },
+    ],
+  });
+  const map = await fetchTpexDaily('2026-09-29');
+  assert.equal(map.get('00687B')?.close_price, 25.67);
+  assert.equal(map.get('6488')?.close_price, 945);
+});
+
+// --- Yahoo 不能把盤中價當收盤價 ---------------------------------------------
+
+/** 帶交易時段資訊的 Yahoo 回應;時間都用台北時間描述 */
+function yahooTw(rows: [string, number | null][], sessionDay: string) {
+  const at = (day: string, hhmm: string) => Date.parse(`${day}T${hhmm}:00+08:00`) / 1000;
+  return {
+    chart: {
+      result: [
+        {
+          meta: {
+            gmtoffset: 28800,
+            currentTradingPeriod: {
+              regular: { start: at(sessionDay, '09:00'), end: at(sessionDay, '13:30') },
+            },
+          },
+          // Yahoo 的台股日線時間戳是當地 09:00
+          timestamp: rows.map(([d]) => at(d, '09:00')),
+          indicators: { quote: [{ close: rows.map(([, c]) => c) }] },
+        },
+      ],
+    },
+  };
+}
+
+test('Yahoo:盤中的那一根是即時價,不能當成收盤價', async () => {
+  stubJson(yahooTw([['2026-09-29', 7.56], ['2026-09-30', 7.6]], '2026-09-30'));
+  // 9/30 早上 09:28(排程延遲後實際跑的時間),台股正在交易
+  const row = await fetchTwQuote('00712', 'TW', Date.parse('2026-09-30T09:28:00+08:00'));
+  assert.equal(row?.price_date, '2026-09-29', '要退回前一個已收盤的交易日');
+  assert.equal(row?.close_price, 7.56);
+});
+
+test('Yahoo:收盤 15 分鐘後才採用當天的收盤價', async () => {
+  const rows: [string, number][] = [
+    ['2026-09-29', 7.56],
+    ['2026-09-30', 7.54],
+  ];
+
+  stubJson(yahooTw(rows, '2026-09-30'));
+  const tooEarly = await fetchTwQuote('00712', 'TW', Date.parse('2026-09-30T13:40:00+08:00'));
+  assert.equal(tooEarly?.price_date, '2026-09-29', '13:40 收盤價還沒定案');
+
+  stubJson(yahooTw(rows, '2026-09-30'));
+  const settled = await fetchTwQuote('00712', 'TW', Date.parse('2026-09-30T20:50:00+08:00'));
+  assert.equal(settled?.price_date, '2026-09-30');
+  assert.equal(settled?.close_price, 7.54);
+});
+
+test('Yahoo:日期用交易所當地時間,不是 UTC', async () => {
+  stubJson({
+    chart: {
+      result: [
+        {
+          meta: { gmtoffset: 28800 },
+          // 台北 2026-09-30 07:00 = UTC 9/29 23:00:用 UTC 會錯成 9/29
+          timestamp: [Date.parse('2026-09-30T07:00:00+08:00') / 1000],
+          indicators: { quote: [{ close: [100] }] },
+        },
+      ],
+    },
+  });
+  const row = await fetchTwQuote('2330', 'TW', Date.parse('2026-10-01T20:00:00+08:00'));
+  assert.equal(row?.price_date, '2026-09-30');
+});
+
+test('Stooq:美股交易時段中,當天還沒收盤的那一列要略過', async () => {
+  let call = 0;
+  globalThis.fetch = (async () => {
+    call += 1;
+    // 第一次是 Yahoo:失敗,退到 Stooq
+    if (call === 1) return { ok: false, status: 503 } as unknown as Response;
+    return {
+      ok: true,
+      status: 200,
+      text: async () =>
+        'Date,Open,High,Low,Close,Volume\n2026-09-28,1,1,1,227.1,1\n2026-09-29,1,1,1,229.5,1\n',
+    } as unknown as Response;
+  }) as typeof fetch;
+
+  // 紐約 9/29 11:00,盤中
+  const row = await fetchUsClose('AAPL', Date.parse('2026-09-29T11:00:00-04:00'));
+  assert.equal(row?.price_date, '2026-09-28');
+  assert.equal(row?.close_price, 227.1);
+});
+
+test('紐約時間換算處理夏令時間', () => {
+  assert.deepEqual(newYorkClock(Date.parse('2026-07-01T20:30:00Z')), {
+    date: '2026-07-01',
+    minutes: 16 * 60 + 30,
+  });
+  assert.deepEqual(newYorkClock(Date.parse('2026-12-01T20:30:00Z')), {
+    date: '2026-12-01',
+    minutes: 15 * 60 + 30,
+  });
 });

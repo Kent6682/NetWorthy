@@ -92,6 +92,82 @@ export async function fetchTwseCloses(): Promise<Map<string, PriceRow>> {
 }
 
 // ---------------------------------------------------------------------------
+// 台股 — 指定日期的正式收盤行情(當天收盤後就有)
+// ---------------------------------------------------------------------------
+
+const TWSE_DAILY_URL = 'https://www.twse.com.tw/rwd/zh/afterTrading/MI_INDEX';
+const TPEX_DAILY_URL = 'https://www.tpex.org.tw/www/zh-tw/afterTrading/dailyQuotes';
+
+interface ExchangeTable {
+  fields?: string[];
+  data?: unknown[][];
+}
+
+interface ExchangeReport {
+  stat?: string;
+  date?: string;
+  tables?: ExchangeTable[];
+}
+
+/**
+ * 從交易所網站的報表格式裡挑出「代號 → 收盤價」。
+ *
+ * 報表裡有好幾張表(大盤指數、類股漲跌…),欄位名稱對得上的才是個股行情;
+ * 靠欄位名稱找位置,而不是寫死第幾欄,交易所改版時比較不會默默讀錯欄。
+ *
+ * 回應的日期跟要求的不一樣時整份不用 —— 寧可沒有,也不要把別天的價格記成這一天。
+ */
+function parseExchangeReport(
+  report: ExchangeReport,
+  date: string,
+  codeField: string,
+  closeField: string
+): Map<string, PriceRow> {
+  const map = new Map<string, PriceRow>();
+  if (report.date && report.date !== date.replace(/-/g, '')) return map;
+
+  for (const table of report.tables ?? []) {
+    const fields = table.fields ?? [];
+    const codeAt = fields.indexOf(codeField);
+    const closeAt = fields.indexOf(closeField);
+    if (codeAt < 0 || closeAt < 0) continue;
+
+    for (const row of table.data ?? []) {
+      const code = String(row[codeAt] ?? '').trim();
+      const close = toNumber(row[closeAt]);
+      // 當天沒成交的收盤價是 '--',略過而不是記成 0
+      if (!code || close === null) continue;
+      map.set(code, { symbol: code, price_date: date, close_price: close });
+    }
+  }
+  return map;
+}
+
+/**
+ * 證交所「每日收盤行情」:指定日期的全部上市股票(含 ETF)正式收盤價。
+ *
+ * 這是當日收盤價的主要來源。openapi 的 STOCK_DAY_ALL 實測要到**隔天早上**才更新
+ * (2026-09-30 晚上 22:51 還停在 9/29),這份則是當天收盤後就有。
+ * 沒開盤的日子回傳空的 map,不會拿別天的資料頂替。
+ */
+export async function fetchTwseDaily(date: string): Promise<Map<string, PriceRow>> {
+  const report = await fetchJson<ExchangeReport>(
+    `${TWSE_DAILY_URL}?date=${date.replace(/-/g, '')}&type=ALLBUT0999&response=json`,
+    40000
+  );
+  return parseExchangeReport(report, date, '證券代號', '收盤價');
+}
+
+/** 櫃買中心「上櫃股票行情」:指定日期的全部上櫃股票正式收盤價。沒開盤的日子是空的 */
+export async function fetchTpexDaily(date: string): Promise<Map<string, PriceRow>> {
+  const report = await fetchJson<ExchangeReport>(
+    `${TPEX_DAILY_URL}?date=${encodeURIComponent(date.replace(/-/g, '/'))}&id=&response=json`,
+    40000
+  );
+  return parseExchangeReport(report, date, '代號', '收盤');
+}
+
+// ---------------------------------------------------------------------------
 // 台股 — 櫃買中心(上櫃)
 // ---------------------------------------------------------------------------
 
@@ -368,7 +444,13 @@ export async function fetchUsdTwdHistory(
 interface YahooChart {
   chart: {
     result?: Array<{
-      meta: { regularMarketPrice?: number; regularMarketTime?: number };
+      meta?: {
+        regularMarketPrice?: number;
+        regularMarketTime?: number;
+        /** 交易所時區相對 UTC 的秒數,台股 28800、美股夏令 -14400 */
+        gmtoffset?: number;
+        currentTradingPeriod?: { regular?: { start: number; end: number } };
+      };
       timestamp?: number[];
       indicators: { quote: Array<{ close?: (number | null)[] }> };
     }>;
@@ -382,7 +464,11 @@ interface YahooChart {
  * `ticker` 是 Yahoo 的代號(美股直接用,台股要加 .TW / .TWO),
  * `reportAs` 是要記進資料庫的代號 —— 台股兩者不一樣。
  */
-async function fetchYahooLatest(ticker: string, reportAs: string): Promise<PriceRow | null> {
+async function fetchYahooLatest(
+  ticker: string,
+  reportAs: string,
+  now: number
+): Promise<PriceRow | null> {
   const data = await fetchJson<YahooChart>(
     `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&range=5d`
   );
@@ -393,18 +479,33 @@ async function fetchYahooLatest(ticker: string, reportAs: string): Promise<Price
   const closes = result.indicators?.quote?.[0]?.close ?? [];
   const stamps = result.timestamp ?? [];
 
+  // 日期以交易所當地時間為準,不是 UTC
+  const offset = result.meta?.gmtoffset ?? 0;
+  const localDate = (sec: number) => new Date((sec + offset) * 1000).toISOString().slice(0, 10);
+
+  /*
+   * 還在交易中、或剛收盤還沒定案的那一根,它的 close 其實是**盤中即時價**。
+   * 早上那班排程常常延到 9 點開盤後才跑,不擋的話會把盤中價當成當天收盤價寫進去。
+   * 收盤後多等 15 分鐘(台股 13:25~13:30 是收盤集合競價,結果要一點時間才定)。
+   */
+  const regular = result.meta?.currentTradingPeriod?.regular;
+  const unsettledDay =
+    regular && now / 1000 < regular.end + YAHOO_SETTLE_SECONDS ? localDate(regular.start) : null;
+
   for (let i = closes.length - 1; i >= 0; i -= 1) {
     const close = closes[i];
-    if (close != null && stamps[i] != null) {
-      return {
-        symbol: reportAs,
-        price_date: new Date(stamps[i] * 1000).toISOString().slice(0, 10),
-        close_price: close,
-      };
-    }
+    if (close == null || stamps[i] == null) continue;
+
+    const day = localDate(stamps[i]);
+    if (day === unsettledDay) continue;
+
+    return { symbol: reportAs, price_date: day, close_price: close };
   }
   return null;
 }
+
+/** 收盤後多久才相信 Yahoo 的收盤價 */
+const YAHOO_SETTLE_SECONDS = 15 * 60;
 
 /** Yahoo 的台股代號後綴:上市 .TW、上櫃 .TWO */
 export type TwBoard = 'TW' | 'TWO';
@@ -420,11 +521,12 @@ export type TwBoard = 'TW' | 'TWO';
  */
 export async function fetchTwQuote(
   symbol: string,
-  board?: TwBoard
+  board?: TwBoard,
+  now: number = Date.now()
 ): Promise<PriceRow | null> {
   for (const suffix of board ? [board] : (['TW', 'TWO'] as const)) {
     try {
-      const row = await fetchYahooLatest(`${symbol}.${suffix}`, symbol);
+      const row = await fetchYahooLatest(`${symbol}.${suffix}`, symbol, now);
       if (row) return row;
     } catch (err) {
       console.warn(`  Yahoo 抓 ${symbol}.${suffix} 失敗:${(err as Error).message}`);
@@ -433,10 +535,34 @@ export async function fetchTwQuote(
   return null;
 }
 
+/** 美股 16:00 收盤,多等 15 分鐘才相信當天的收盤價(紐約時間,從午夜起算的分鐘數) */
+const US_CLOSE_SETTLED_MINUTES = 16 * 60 + 15;
+
+/** 紐約當地的日期與時間 —— 夏令時間由 Intl 處理 */
+export function newYorkClock(now: number): { date: string; minutes: number } {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/New_York',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(new Date(now));
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? '00';
+  return {
+    date: `${get('year')}-${get('month')}-${get('day')}`,
+    minutes: Number(get('hour')) * 60 + Number(get('minute')),
+  };
+}
+
 /** 先試 Yahoo Finance,失敗再退到 Stooq */
-export async function fetchUsClose(symbol: string): Promise<PriceRow | null> {
+export async function fetchUsClose(
+  symbol: string,
+  now: number = Date.now()
+): Promise<PriceRow | null> {
   try {
-    const row = await fetchYahooLatest(symbol, symbol);
+    const row = await fetchYahooLatest(symbol, symbol, now);
     if (row) return row;
   } catch (err) {
     console.warn(`  Yahoo 抓 ${symbol} 失敗(${(err as Error).message}),改試 Stooq`);
@@ -447,12 +573,18 @@ export async function fetchUsClose(symbol: string): Promise<PriceRow | null> {
     const csv = await fetchText(
       `https://stooq.com/q/d/l/?s=${encodeURIComponent(symbol.toLowerCase())}.us&i=d`
     );
-    const lines = csv.trim().split('\n');
-    if (lines.length < 2) return null;
-    const last = lines[lines.length - 1].split(',');
-    const close = toNumber(last[4]);
-    if (close === null || !/^\d{4}-\d{2}-\d{2}$/.test(last[0])) return null;
-    return { symbol, price_date: last[0], close_price: close };
+    const lines = csv.trim().split('\n').slice(1);
+
+    // Stooq 的日線在美股交易時段會附上當天還沒收盤的那一列,要略過
+    const { date: nyDate, minutes: nyMinutes } = newYorkClock(now);
+    for (let i = lines.length - 1; i >= 0; i -= 1) {
+      const cols = lines[i].split(',');
+      const close = toNumber(cols[4]);
+      if (close === null || !/^\d{4}-\d{2}-\d{2}$/.test(cols[0])) continue;
+      if (cols[0] === nyDate && nyMinutes < US_CLOSE_SETTLED_MINUTES) continue;
+      return { symbol, price_date: cols[0], close_price: close };
+    }
+    return null;
   } catch (err) {
     console.warn(`  Stooq 抓 ${symbol} 也失敗:${(err as Error).message}`);
     return null;

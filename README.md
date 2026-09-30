@@ -110,8 +110,11 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY  = eyJhbGciOi...
 4. 選左側「每日同步股價與資產快照」→ 右邊 **Run workflow** 手動跑一次,確認會成功
 
 排程設定在 `.github/workflows/sync-prices.yml`:
-- 台灣時間 **14:30**(台股收盤後)
-- 台灣時間隔天 **06:30**(美股收盤後,補抓美股與匯率)
+- 台灣時間 **14:47**(台股收盤後)
+- 台灣時間隔天 **06:17**(美股收盤後,補抓美股與匯率)
+
+分鐘刻意避開整點與半點。GitHub 的免費排程在整點、半點最擁擠,實測 14:30 那班常拖到晚上 8~9 點才跑。
+延遲不影響正確性:每次同步都會向交易所重抓近幾個交易日的**正式收盤價**,晚跑只是晚一點看到。
 
 > GitHub 的排程在尖峰時段可能延遲十幾分鐘,這對每日收盤價沒有影響。
 
@@ -222,8 +225,8 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY  = eyJhbGciOi...
 
 | 資料 | 來源 | 需要金鑰 |
 |---|---|---|
-| 台股(上市) | 證交所 OpenAPI `STOCK_DAY_ALL`;還沒更新到當天時逐檔改問 Yahoo | 否 |
-| 台股(上櫃) | 櫃買中心 OpenAPI;同上 | 否 |
+| 台股(上市) | 證交所「每日收盤行情」(當天收盤後就有);後備:OpenAPI `STOCK_DAY_ALL`、Yahoo | 否 |
+| 台股(上櫃) | 櫃買中心「上櫃股票行情」;後備:櫃買 OpenAPI、Yahoo | 否 |
 | 台股休市日 | 證交所 OpenAPI `holidaySchedule` | 否 |
 | 美股 | Yahoo Finance,失敗自動退到 Stooq | 否 |
 | 美元匯率 | open.er-api.com,失敗自動退到 Frankfurter | 否 |

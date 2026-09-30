@@ -5,10 +5,11 @@ import MonthStrip from '@/components/MonthStrip';
 import PnlCalendar from '@/components/PnlCalendar';
 import { todayInTaipei } from '@/lib/format';
 import {
-  buildPriceLookup,
+  buildDatedPriceLookup,
   computeDailyPnl,
   computeHoldingPnl,
   groupTradesByDate,
+  incompleteDays,
   monthGrid,
   monthTotal,
   parseDay,
@@ -74,39 +75,56 @@ export default async function CalendarPage({
   const first = `${year}-01-01`;
   const last = `${year}-12-31`;
 
-  const [snapshots, trades, tradingDays, holidays] = await Promise.all([
+  const [snapshots, trades, tradingDays, holidays, allTxns, prices, stocks] = await Promise.all([
     // 多要前一天,才算得出 1/1 的盈虧
     getSnapshotRange(scope, session.userId, previousDay(first), last),
     getStockTradesInRange(ownerIds, first, last),
     getTradingDays(first, last),
     getHolidays(first, last),
+    getStockTransactions(ownerIds),
+    // 整年的收盤價:檢查每天的價格齊不齊,也給單日明細查前一日(往前多抓一個月涵蓋連假)
+    getPricesInRange(shiftDays(first, -PRICE_LOOKBACK_DAYS), last),
+    getStocks(),
   ]);
 
   // 盈虧看的是股票市值,不是總資產 —— 詳見 lib/pnl.ts 的說明
   const stockByDate = new Map(snapshots.map((s) => [s.snapshot_date, Number(s.stock_twd)]));
+
+  /*
+   * 有開盤、但持有中的台股有任何一檔還沒拿到當天收盤價的日子,快照是用部分舊價格
+   * 算出來的 —— 數字看起來正常卻是錯的。這些日子一律標「待更新」,不給數字。
+   */
+  const priced = new Set(prices.map((p) => `${p.symbol}|${p.price_date}`));
+  const marketOf = new Map(stocks.map((st) => [st.symbol, st.market]));
+  const incomplete = incompleteDays(
+    allTxns,
+    tradingDays,
+    (symbol, date) => priced.has(`${symbol}|${date}`),
+    (symbol) => (marketOf.get(symbol) ?? 'TW') === 'TW'
+  );
 
   const yearRows = computeDailyPnl(
     stockByDate,
     groupTradesByDate(trades),
     yearDays,
     tradingDays,
-    new Set(holidays.keys())
+    new Set(holidays.keys()),
+    incomplete
   );
   const byDate = new Map<string, DailyPnl>(
     yearRows.filter((r) => r.date.startsWith(month)).map((r) => [r.date, r])
   );
   const months = summarizeMonths(yearRows);
 
-  // 選了某一天才去撈明細要用的資料
   let detail = null;
   if (selectedDay) {
-    const [allTxns, prices, stocks] = await Promise.all([
-      getStockTransactions(ownerIds),
-      getPricesInRange(shiftDays(selectedDay, -PRICE_LOOKBACK_DAYS), selectedDay),
-      getStocks(),
-    ]);
-
-    const holdings = computeHoldingPnl(allTxns, selectedDay, buildPriceLookup(prices));
+    const lookup = buildDatedPriceLookup(prices);
+    const holdings = computeHoldingPnl(
+      allTxns,
+      selectedDay,
+      (symbol, date) => lookup(symbol, date)?.price ?? null,
+      (symbol, date) => lookup(symbol, date)?.date ?? null
+    );
     const row = byDate.get(selectedDay);
 
     detail = {
@@ -114,6 +132,9 @@ export default async function CalendarPage({
       rows: holdings,
       total: row?.pnl ?? null,
       hasInitial: (row?.trades?.initial ?? 0) > 0,
+      // 沒開盤的日子每檔都「沿用前一日」,那是正常的,不該標成未更新
+      tradingDay: tradingDays.has(selectedDay) || (row?.pending ?? false),
+      pending: row?.pending ?? false,
       names: new Map(stocks.filter((st) => st.name).map((st) => [st.symbol, st.name as string])),
     };
   }
@@ -157,6 +178,8 @@ export default async function CalendarPage({
             rows={detail.rows}
             total={detail.total}
             hasInitial={detail.hasInitial}
+            tradingDay={detail.tradingDay}
+            pending={detail.pending}
             names={detail.names}
           />
         </div>

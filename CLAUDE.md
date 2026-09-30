@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 npm install
 npm run dev      # http://localhost:3000
 npm run build
-npm test         # node --test,125 個測試,不連網(但要先 npm install)
+npm test         # node --test,141 個測試,不連網(但要先 npm install)
 npm run sync     # 手動跑一次每日同步(需 SUPABASE_SERVICE_ROLE_KEY)
 npm run backfill # 從第一筆交易重算所有歷史快照並補抓歷史價格(同上,需金鑰)
 ```
@@ -60,7 +60,11 @@ node --test --experimental-strip-types --test-name-pattern="零股" tests/holdin
 
 `daily_net_worth_snapshots` 是同步腳本每天整批重算的衍生資料:先刪掉那些日期的列再重寫,所以重跑不會重複。每位成員一列,另外每個家庭多一列 ``owner_id` IS NULL` 的合計 —— 首頁「全家」視角讀的就是那一列。
 
-**每日同步平常只重算今天與昨天。** 多算昨天是因為證交所常常在 14:30 那班排程跑完之後才公布當天收盤價 —— 那時候今天的快照會用前一個交易日的價格算出來,而隔天早上那班的 `today` 已經變成新的一天。少了這一步,那天的快照就永久停在錯的價格上。也因為要重算過去的日子,`rebuildSnapshots()` 不能用 `latest_stock_prices`(每檔只有最新一天),必須依日期查價。
+**台股收盤價的可信度順序:交易所指定日期的正式行情 → openapi 全市場檔案 → Yahoo。** 每次同步都向證交所 `MI_INDEX` 與櫃買 `dailyQuotes` 重抓近幾個交易日(`officialPriceDates()`,今天往回 6 天、略過週末)的正式收盤價,之前用後備來源暫時補上的價格會被蓋掉 —— **當日與前日的收盤價因此一定是正式的**。openapi 的 `STOCK_DAY_ALL` 要到**隔天早上**才更新,不能當主要來源。Yahoo 只在交易所都還沒有今天時才問,而且 `fetchYahooLatest()` 會略過**還在交易中**的那一根(用回應裡的 `currentTradingPeriod`,收盤後再等 15 分鐘)—— 早上那班常延到 9 點開盤後才跑,不擋的話會把盤中價當收盤價寫進去。Stooq 同理用紐約時間判斷。
+
+**快照重算的起點取三者最早:昨天、待重算清單、這次寫入的最早價格日期。** 多算昨天是因為昨天那班可能跑在正式收盤價公布前;價格日期那一項是因為近幾天的價格可能剛被正式價格更正(例如排程被 GitHub 跳過一兩班)。也因為要重算過去的日子,`rebuildSnapshots()` 不能用 `latest_stock_prices`(每檔只有最新一天),必須依日期查價。
+
+**有開盤、但持有中的台股有任何一檔缺當天收盤價的日子,日曆一律「待更新」**(`incompleteDays()`)。那種快照是部分沿用舊價格算的,數字看起來正常卻是錯的 —— 2026-09-29 就曾只算了一檔。單日明細則靠 `priceDate` 把沿用舊價格的那一列標成「未更新」。美股不參與這個檢查(開盤日跟台股不同)。
 
 **交易變動時從最早受影響的那天重算。** `stock_transactions` 與 `account_transactions` 上的 `request_snapshot_rebuild()` 觸發器,在任何新增、修改、刪除時把「新舊日期中較早的那天」記進 `snapshot_rebuild_requests`(每個家庭一列,只保留最早的日期)。下一次每日同步看到就從那天重算,算完只清掉開跑前提出的請求。所以補登、編輯、刪除舊交易都不用再手動回填。重算區間可能長達數月,查價一律用 `selectAll()` 分頁 —— PostgREST 單次 1,000 列的上限會**無聲截斷**。
 
@@ -122,6 +126,6 @@ export async function xxx(_prev: unknown, formData: FormData): Promise<{ error?:
 
 ## 每日同步
 
-`.github/workflows/sync-prices.yml` 每個工作日跑兩次(台灣時間 14:30 台股收盤後、隔天 06:30 美股收盤後),也可手動觸發。資料來源都是免費、免金鑰的公開介面,各有備援(`scripts/providers.ts`):台股走證交所 + 櫃買中心各一次呼叫涵蓋全市場,美股逐檔抓(Yahoo → Stooq),匯率 open.er-api.com → Frankfurter。單一標的抓不到只會 warn,不中斷整份同步。
+`.github/workflows/sync-prices.yml` 每個工作日跑兩次(台灣時間 14:47 台股收盤後、隔天 06:17 美股收盤後),也可手動觸發。**分鐘刻意避開 :00 與 :30** —— GitHub 排程在整點、半點最擁擠,實測 14:30 那班常拖到晚上 8~9 點。延遲只影響「多快看到」,不影響正確性。資料來源都是免費、免金鑰的公開介面,各有備援(`scripts/providers.ts`):台股見上面的可信度順序,美股逐檔抓(Yahoo → Stooq),匯率 open.er-api.com → Frankfurter。單一標的抓不到只會 warn,不中斷整份同步。
 
 公開 repo 連續 60 天沒有活動,GitHub 會自動停用排程。`.github/workflows/keepalive.yml` 每月 1 日對排程工作流程呼叫一次「啟用」API 重設計時(連自己一起),不產生 commit。

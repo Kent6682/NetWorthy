@@ -106,7 +106,9 @@ export function computeDailyPnl(
   days: string[],
   tradingDays?: Set<string>,
   /** 證交所公告的休市日。有這份就不用猜,未來的假日也標得出來 */
-  holidays?: ReadonlySet<string>
+  holidays?: ReadonlySet<string>,
+  /** 有開盤但持股還沒全部拿到當天收盤價的日子(incompleteDays()),一律待更新 */
+  incomplete?: ReadonlySet<string>
 ): DailyPnl[] {
   /*
    * 已知報價涵蓋到哪一天。這條界線把「休市」跟「報價還沒到」分開:
@@ -140,7 +142,10 @@ export function computeDailyPnl(
         date <= latestTradingDay &&
         !tradingDays!.has(date));
     const pending =
-      !holiday && hasSnapshot && latestTradingDay !== undefined && date > latestTradingDay;
+      !holiday &&
+      hasSnapshot &&
+      ((latestTradingDay !== undefined && date > latestTradingDay) ||
+        (incomplete?.has(date) ?? false));
 
     const base = {
       date,
@@ -184,6 +189,19 @@ export function computeDailyPnl(
 export function buildPriceLookup(
   rows: { symbol: string; price_date: string; close_price: number }[]
 ): (symbol: string, date: string) => number | null {
+  const lookup = buildDatedPriceLookup(rows);
+  return (symbol, date) => lookup(symbol, date)?.price ?? null;
+}
+
+/**
+ * 同上,但連「實際用的是哪一天的收盤價」一起回傳。
+ *
+ * 單日明細要靠這個分辨「當天收盤價」與「還沒更新、沿用前一個交易日」——
+ * 兩者算出來都是一個數字,不標出來的話,沿用的價格看起來就像當天的。
+ */
+export function buildDatedPriceLookup(
+  rows: { symbol: string; price_date: string; close_price: number }[]
+): (symbol: string, date: string) => { price: number; date: string } | null {
   const bySymbol = new Map<string, { date: string; price: number }[]>();
 
   for (const r of rows) {
@@ -197,13 +215,41 @@ export function buildPriceLookup(
     const list = bySymbol.get(symbol);
     if (!list) return null;
 
-    let found: number | null = null;
+    let found: { date: string; price: number } | null = null;
     for (const row of list) {
       if (row.date > date) break;
-      found = row.price;
+      found = row;
     }
     return found;
   };
+}
+
+/**
+ * 找出「有開盤,但持有中的台股有任何一檔還沒有當天收盤價」的日子。
+ *
+ * 這種日子的快照是用部分沿用舊價格算出來的,盈虧看起來正常卻不完整 ——
+ * 2026-09-29 就是這樣:只有 2542 有當天價格,另外三檔沿用 9/24,格子只剩 −2.1 萬,
+ * 隔天補齊後才變成正確的 −18.8 萬。這些日子要顯示「待更新」,不能給數字。
+ *
+ * 只檢查台股(`checkSymbol`):美股的開盤日跟台股不同,拿台股的交易日去要求美股
+ * 有價格,美國假日那幾天會永遠卡在待更新。
+ */
+export function incompleteDays(
+  txns: StockTransaction[],
+  tradingDays: ReadonlySet<string>,
+  hasPrice: (symbol: string, date: string) => boolean,
+  checkSymbol: (symbol: string) => boolean
+): Set<string> {
+  const incomplete = new Set<string>();
+
+  for (const date of tradingDays) {
+    const held = calculateHoldings(txns.filter((t) => t.transaction_date <= date));
+    const missing = held.some(
+      (h) => h.shares > 0 && checkSymbol(h.symbol) && !hasPrice(h.symbol, date)
+    );
+    if (missing) incomplete.add(date);
+  }
+  return incomplete;
 }
 
 /** 單日明細裡的一檔 */
@@ -214,6 +260,11 @@ export interface HoldingPnl {
   prevShares: number;
   price: number;
   prevPrice: number;
+  /**
+   * 「當日收盤」實際是哪一天的價格。跟這一天不同就是還沒更新、沿用舊價格;
+   * null 代表完全沒有報價,退回成本價估算。
+   */
+  priceDate: string | null;
   /** null 代表這檔當天是導入既有部位,不計盈虧 */
   pnl: number | null;
   /** 盈虧佔前一日市值的百分比;當天才建立的部位沒有基準,是 null */
@@ -233,7 +284,9 @@ export interface HoldingPnl {
 export function computeHoldingPnl(
   txns: StockTransaction[],
   date: string,
-  priceOn: (symbol: string, date: string) => number | null
+  priceOn: (symbol: string, date: string) => number | null,
+  /** 查某檔在某天用的是哪一天的收盤價;不給的話 priceDate 一律是 null */
+  priceDateOn?: (symbol: string, date: string) => string | null
 ): HoldingPnl[] {
   const prev = previousDay(date);
 
@@ -277,6 +330,7 @@ export function computeHoldingPnl(
       prevShares,
       price,
       prevPrice,
+      priceDate: priceDateOn?.(symbol, date) ?? null,
       pnl,
       // 基準是前一日的市值。當天才建立的部位沒有前一日,給不出比率
       percent: pnl === null || prevValue === 0 ? null : (pnl / prevValue) * 100,
