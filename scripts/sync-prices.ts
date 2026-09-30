@@ -23,6 +23,7 @@ import {
   fetchTwseCloses,
   fetchUsClose,
   fetchUsdTwd,
+  isCloseSettled,
   type PriceRow,
   type TwBoard,
 } from './providers.ts';
@@ -211,7 +212,26 @@ async function syncPrices(): Promise<string | null> {
     await new Promise((r) => setTimeout(r, 250)); // 別打太快
   }
 
-  const priceRows = [...rows.values()];
+  /*
+   * 最後一道關卡:盤中(或剛收盤、收盤價還沒定案)不寫入「今天」的價格。
+   *
+   * 早上那班排程常延到 9 點開盤後才跑,那時候拿到的「今天收盤價」其實是盤中即時價。
+   * 這裡只看時鐘,不管價格來自哪個來源 —— 昨天以前的正式收盤價、美股、匯率照常更新,
+   * 擋掉的只有台股當天 14:00 前、美股當天紐約 16:15 前的價格,下一班會補上。
+   */
+  const now = Date.now();
+  const marketOf = new Map(stocks.map((s) => [s.symbol, s.market === 'US' ? 'US' : 'TW'] as const));
+  const priceRows: PriceRow[] = [];
+  const unsettled: PriceRow[] = [];
+  for (const r of rows.values()) {
+    (isCloseSettled(marketOf.get(r.symbol) ?? 'TW', r.price_date, now) ? priceRows : unsettled).push(r);
+  }
+  if (unsettled.length > 0) {
+    log(
+      `  盤中或收盤價還沒定案,先不寫入:` +
+        unsettled.map((r) => `${r.symbol} ${r.price_date.slice(5)}`).join('、')
+    );
+  }
 
   if (priceRows.length > 0) {
     const { error: upsertError } = await db()

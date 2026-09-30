@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 npm install
 npm run dev      # http://localhost:3000
 npm run build
-npm test         # node --test,141 個測試,不連網(但要先 npm install)
+npm test         # node --test,146 個測試,不連網(但要先 npm install)
 npm run sync     # 手動跑一次每日同步(需 SUPABASE_SERVICE_ROLE_KEY)
 npm run backfill # 從第一筆交易重算所有歷史快照並補抓歷史價格(同上,需金鑰)
 ```
@@ -61,6 +61,8 @@ node --test --experimental-strip-types --test-name-pattern="零股" tests/holdin
 `daily_net_worth_snapshots` 是同步腳本每天整批重算的衍生資料:先刪掉那些日期的列再重寫,所以重跑不會重複。每位成員一列,另外每個家庭多一列 ``owner_id` IS NULL` 的合計 —— 首頁「全家」視角讀的就是那一列。
 
 **台股收盤價的可信度順序:交易所指定日期的正式行情 → openapi 全市場檔案 → Yahoo。** 每次同步都向證交所 `MI_INDEX` 與櫃買 `dailyQuotes` 重抓近幾個交易日(`officialPriceDates()`,今天往回 6 天、略過週末)的正式收盤價,之前用後備來源暫時補上的價格會被蓋掉 —— **當日與前日的收盤價因此一定是正式的**。openapi 的 `STOCK_DAY_ALL` 要到**隔天早上**才更新,不能當主要來源。Yahoo 只在交易所都還沒有今天時才問,而且 `fetchYahooLatest()` 會略過**還在交易中**的那一根(用回應裡的 `currentTradingPeriod`,收盤後再等 15 分鐘)—— 早上那班常延到 9 點開盤後才跑,不擋的話會把盤中價當收盤價寫進去。Stooq 同理用紐約時間判斷。
+
+**寫入前還有一道只看時鐘的關卡:`isCloseSettled()`。** 台股當天的價格要台北時間 14:00 以後、美股要紐約時間 16:15 以後才寫入,不管來自哪個來源。來源自己的判斷(Yahoo 的交易時段欄位)萬一缺欄位或出錯,這一關仍然擋得住盤中價。刻意**不是**「盤中整班不跑」—— 早上那班還要寫昨天的正式收盤價、美股收盤價與匯率,擋掉的只有「今天」的台股價格。
 
 **快照重算的起點取三者最早:昨天、待重算清單、這次寫入的最早價格日期。** 多算昨天是因為昨天那班可能跑在正式收盤價公布前;價格日期那一項是因為近幾天的價格可能剛被正式價格更正(例如排程被 GitHub 跳過一兩班)。也因為要重算過去的日子,`rebuildSnapshots()` 不能用 `latest_stock_prices`(每檔只有最新一天),必須依日期查價。
 

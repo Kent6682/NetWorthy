@@ -538,10 +538,16 @@ export async function fetchTwQuote(
 /** 美股 16:00 收盤,多等 15 分鐘才相信當天的收盤價(紐約時間,從午夜起算的分鐘數) */
 const US_CLOSE_SETTLED_MINUTES = 16 * 60 + 15;
 
-/** 紐約當地的日期與時間 —— 夏令時間由 Intl 處理 */
-export function newYorkClock(now: number): { date: string; minutes: number } {
+/**
+ * 台股 13:30 收盤(13:25~13:30 是收盤集合競價),證交所約 14:00 後公布當日行情。
+ * 台北時間 14:00 以前,任何來源給的「今天」價格都當成盤中價。
+ */
+const TW_CLOSE_SETTLED_MINUTES = 14 * 60;
+
+/** 某個時區的當地日期與時間(從午夜起算的分鐘數)—— 夏令時間由 Intl 處理 */
+function marketClock(now: number, timeZone: string): { date: string; minutes: number } {
   const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'America/New_York',
+    timeZone,
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
@@ -554,6 +560,28 @@ export function newYorkClock(now: number): { date: string; minutes: number } {
     date: `${get('year')}-${get('month')}-${get('day')}`,
     minutes: Number(get('hour')) * 60 + Number(get('minute')),
   };
+}
+
+/** 紐約當地的日期與時間 */
+export function newYorkClock(now: number): { date: string; minutes: number } {
+  return marketClock(now, 'America/New_York');
+}
+
+/**
+ * 這個日期的收盤價在 `now` 這一刻定案了沒 —— **只看時鐘,不看資料來源說什麼**。
+ *
+ * 同步寫入資料庫前最後一道關卡:當地還沒收盤(或剛收盤、收盤價還沒定)時,
+ * 「今天」的價格一律不寫,不管它來自哪裡。資料來源本身的判斷(Yahoo 的交易時段)
+ * 萬一哪天缺欄位或出錯,這一關仍然擋得住盤中價。
+ *
+ * 過去的日期一律算定案;未來的日期(時區算錯之類)一律不收。
+ */
+export function isCloseSettled(market: 'TW' | 'US', priceDate: string, now: number): boolean {
+  const { date, minutes } =
+    market === 'US' ? marketClock(now, 'America/New_York') : marketClock(now, 'Asia/Taipei');
+  if (priceDate < date) return true;
+  if (priceDate > date) return false;
+  return minutes >= (market === 'US' ? US_CLOSE_SETTLED_MINUTES : TW_CLOSE_SETTLED_MINUTES);
 }
 
 /** 先試 Yahoo Finance,失敗再退到 Stooq */

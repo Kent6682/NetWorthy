@@ -11,6 +11,7 @@ import {
   fetchTpexCloses,
   fetchTpexDaily,
   fetchUsClose,
+  isCloseSettled,
   newYorkClock,
   fetchTwHolidays,
   fetchTwQuote,
@@ -461,4 +462,37 @@ test('紐約時間換算處理夏令時間', () => {
     date: '2026-12-01',
     minutes: 15 * 60 + 30,
   });
+});
+
+// --- 最後一道關卡:只看時鐘判斷收盤價定案了沒 ---------------------------------
+
+test('台股:台北時間 14:00 以前,今天的價格一律視為盤中價', () => {
+  const at = (t: string) => Date.parse(`2026-09-30T${t}:00+08:00`);
+  assert.equal(isCloseSettled('TW', '2026-09-30', at('09:28')), false, '開盤中');
+  assert.equal(isCloseSettled('TW', '2026-09-30', at('13:59')), false, '剛收盤,收盤價還沒公布');
+  assert.equal(isCloseSettled('TW', '2026-09-30', at('14:00')), true);
+  assert.equal(isCloseSettled('TW', '2026-09-30', at('20:50')), true);
+});
+
+test('台股:盤中照樣可以寫入昨天以前的收盤價', () => {
+  const morning = Date.parse('2026-09-30T09:28:00+08:00');
+  assert.equal(isCloseSettled('TW', '2026-09-29', morning), true, '前日的正式收盤價要照常更新');
+  assert.equal(isCloseSettled('TW', '2026-09-24', morning), true);
+});
+
+test('台股:早上 8 點前(還沒開盤)今天也還沒有收盤價', () => {
+  assert.equal(isCloseSettled('TW', '2026-09-30', Date.parse('2026-09-30T07:00:00+08:00')), false);
+});
+
+test('美股:以紐約時間判斷,16:15 以後才算定案', () => {
+  // 台北 9/30 00:00 = 紐約 9/29 12:00,美股盤中
+  assert.equal(isCloseSettled('US', '2026-09-29', Date.parse('2026-09-30T00:00:00+08:00')), false);
+  // 台北 9/30 06:17 = 紐約 9/29 18:17,已收盤
+  assert.equal(isCloseSettled('US', '2026-09-29', Date.parse('2026-09-30T06:17:00+08:00')), true);
+  // 冬令時間:台北 12/2 05:10 = 紐約 12/1 16:10,還差 5 分鐘
+  assert.equal(isCloseSettled('US', '2026-12-01', Date.parse('2026-12-02T05:10:00+08:00')), false);
+});
+
+test('未來的日期一律不收(時區算錯時的保險)', () => {
+  assert.equal(isCloseSettled('TW', '2026-10-01', Date.parse('2026-09-30T20:00:00+08:00')), false);
 });
