@@ -15,15 +15,18 @@ import { buildPriceLookup, previousDay } from '../lib/pnl.ts';
 import { clearRebuildRequests, loadSnapshotSources, replaceSnapshots } from './snapshot-data.ts';
 import {
   fetchTpexCloses,
+  fetchTpexCorporateActions,
   fetchTpexDaily,
   fetchTwseDaily,
   fetchTwQuote,
   fetchTwHolidays,
   fetchTwSymbols,
   fetchTwseCloses,
+  fetchTwseCorporateActions,
   fetchUsClose,
   fetchUsdTwd,
   isCloseSettled,
+  type CorporateActionRow,
   type PriceRow,
   type TwBoard,
 } from './providers.ts';
@@ -306,6 +309,53 @@ async function syncHolidays(): Promise<number> {
   return holidays.length;
 }
 
+/**
+ * 證交所與櫃買的除權除息預告表 → corporate_actions(「待確認配息」的資料來源)。
+ *
+ * 預告表只涵蓋前後一個多月,這張表靠每天寫入累積成歷史,只新增或更新、不刪除。
+ * 金額還沒公布(null)的那幾筆只在第一次出現時寫入 —— 不能拿 null 去蓋掉
+ * 之前已經公布的金額(來源偶爾會把已公布的欄位又顯示成空白或「尚未公告」)。
+ */
+async function syncCorporateActions(): Promise<number> {
+  const rows: CorporateActionRow[] = [];
+  for (const [name, fetcher] of [
+    ['證交所', fetchTwseCorporateActions],
+    ['櫃買中心', fetchTpexCorporateActions],
+  ] as const) {
+    try {
+      rows.push(...(await fetcher()));
+    } catch (err) {
+      console.warn(`  ${name}除權息預告抓取失敗:${(err as Error).message}`);
+    }
+  }
+  if (rows.length === 0) return 0;
+
+  // 同一檔同一天兩邊都有時(理論上不會)只留一筆,避免同一批 upsert 撞主鍵
+  const unique = new Map(rows.map((r) => [`${r.market}|${r.symbol}|${r.ex_date}`, r]));
+  const stamp = new Date().toISOString();
+  const known = [...unique.values()].filter((r) => r.cash_dividend !== null || r.stock_ratio !== null);
+  const pending = [...unique.values()].filter((r) => r.cash_dividend === null && r.stock_ratio === null);
+
+  if (known.length > 0) {
+    const { error } = await db()
+      .from('corporate_actions')
+      .upsert(known.map((r) => ({ ...r, updated_at: stamp })), { onConflict: 'market,symbol,ex_date' });
+    if (error) throw explainWriteError(error, '寫入除權息預告');
+  }
+  if (pending.length > 0) {
+    const { error } = await db()
+      .from('corporate_actions')
+      .upsert(pending.map((r) => ({ ...r, updated_at: stamp })), {
+        onConflict: 'market,symbol,ex_date',
+        ignoreDuplicates: true,
+      });
+    if (error) throw explainWriteError(error, '寫入除權息預告');
+  }
+
+  log(`除權息預告:${known.length} 筆有金額、${pending.length} 筆金額還沒公布`);
+  return unique.size;
+}
+
 // ---------------------------------------------------------------------------
 // 3. 匯率
 // ---------------------------------------------------------------------------
@@ -500,7 +550,7 @@ async function main() {
    * 代號字典只是新增交易時的便利功能,壞掉不該讓整份同步失敗 ——
    * 價格與快照才是這支腳本真正的職責。
    */
-  log('\n[2/4] 同步台股代號字典與休市日');
+  log('\n[2/4] 同步台股代號字典、休市日與除權息預告');
   try {
     await syncSymbols();
   } catch (err) {
@@ -511,6 +561,12 @@ async function main() {
     await syncHolidays();
   } catch (err) {
     console.warn(`  休市日同步失敗,不影響其他資料:${(err as Error).message}`);
+  }
+  // 除權息預告只用來提示「待確認配息」,抓不到不影響價格與快照
+  try {
+    await syncCorporateActions();
+  } catch (err) {
+    console.warn(`  除權息預告同步失敗,不影響其他資料:${(err as Error).message}`);
   }
 
   log('\n[3/4] 同步匯率');

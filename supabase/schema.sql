@@ -347,6 +347,35 @@ create table if not exists public.market_holidays (
   primary key (market, holiday_date)
 );
 
+-- ----------------------------------------------------------------------------
+-- 除權息公告 — 每日同步從證交所與櫃買的「除權除息預告表」寫進來
+--
+-- 「待確認配息」的資料來源:使用者在除息日前一天收盤時有持股,股票頁就提示一筆。
+-- 預告表只涵蓋前後一個多月,所以這張表是從上線那天起逐日累積的歷史,只新增或更新、
+-- 不刪除。ETF 的配息金額常常在除息前幾天才公布,之前 cash_dividend 是 null。
+-- ----------------------------------------------------------------------------
+create table if not exists public.corporate_actions (
+  market        text not null check (market in ('TW', 'US')),
+  symbol        text not null,
+  ex_date       date not null,
+  cash_dividend numeric(18,6),   -- 每股現金股利;還沒公布是 null
+  stock_ratio   numeric(18,8),   -- 每股配幾股,0.05 = 每千股配 50 股;沒有配股是 null
+  updated_at    timestamptz not null default now(),
+  primary key (market, symbol, ex_date)
+);
+
+-- ----------------------------------------------------------------------------
+-- 使用者按了「略過」的配息提示 —— 例如已經用別的日期手動記過了
+-- ----------------------------------------------------------------------------
+create table if not exists public.dividend_dismissals (
+  owner_id   uuid not null references public.profiles(id) on delete cascade,
+  symbol     text not null,
+  ex_date    date not null,
+  kind       text not null check (kind in ('dividend', 'stock_dividend')),
+  created_at timestamptz not null default now(),
+  primary key (owner_id, symbol, ex_date, kind)
+);
+
 -- ============================================================================
 -- 5. 每日總資產快照(首頁趨勢線資料來源)
 -- ============================================================================
@@ -455,6 +484,8 @@ alter table public.stock_price_history       enable row level security;
 alter table public.fx_rates                  enable row level security;
 alter table public.market_symbols            enable row level security;
 alter table public.market_holidays           enable row level security;
+alter table public.corporate_actions         enable row level security;
+alter table public.dividend_dismissals       enable row level security;
 alter table public.daily_net_worth_snapshots enable row level security;
 alter table public.snapshot_rebuild_requests enable row level security;
 
@@ -556,6 +587,17 @@ create policy market_symbols_select on public.market_symbols
 drop policy if exists market_holidays_select on public.market_holidays;
 create policy market_holidays_select on public.market_holidays
   for select to authenticated using (true);
+
+drop policy if exists corporate_actions_select on public.corporate_actions;
+create policy corporate_actions_select on public.corporate_actions
+  for select to authenticated using (true);
+
+-- 略過紀錄只有本人看得到、改得到
+drop policy if exists dividend_dismissals_own on public.dividend_dismissals;
+create policy dividend_dismissals_own on public.dividend_dismissals
+  for all to authenticated
+  using (owner_id = auth.uid())
+  with check (owner_id = auth.uid());
 
 -- daily_net_worth_snapshots ---------------------------------------------------
 drop policy if exists snapshot_select on public.daily_net_worth_snapshots;

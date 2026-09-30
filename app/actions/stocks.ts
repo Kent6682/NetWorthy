@@ -215,3 +215,26 @@ export async function deleteStockTransaction(formData: FormData): Promise<void> 
 
   revalidateAll();
 }
+
+/** 「待確認配息」按略過 —— 例如已經用別的日期手動記過了。只記自己的 */
+export async function dismissDividendSuggestion(formData: FormData): Promise<void> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return;
+
+  const symbol = String(formData.get('symbol') ?? '').trim();
+  const exDate = String(formData.get('ex_date') ?? '');
+  const kind = String(formData.get('kind') ?? '');
+  if (!symbol || !exDate || (kind !== 'dividend' && kind !== 'stock_dividend')) return;
+
+  await supabase
+    .from('dividend_dismissals')
+    .upsert(
+      { owner_id: user.id, symbol, ex_date: exDate, kind },
+      { onConflict: 'owner_id,symbol,ex_date,kind', ignoreDuplicates: true }
+    );
+
+  revalidatePath('/stocks');
+}

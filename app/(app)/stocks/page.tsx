@@ -1,13 +1,24 @@
 import { Suspense } from 'react';
 import FilterBar from '@/components/FilterBar';
 import ConfirmDelete from '@/components/ConfirmDelete';
+import DividendSuggestions from '@/components/DividendSuggestions';
 import StockTransactionForm from '@/components/StockTransactionForm';
 import { EmptyState, ListRow, SectionHeader } from '@/components/ListRow';
 import { deleteStockTransaction } from '@/app/actions/stocks';
-import { formatDate, formatMoney, formatPercent, formatPrice, formatShares } from '@/lib/format';
+import { dividendSuggestions } from '@/lib/dividends';
+import {
+  formatDate,
+  formatMoney,
+  formatPercent,
+  formatPrice,
+  formatShares,
+  todayInTaipei,
+} from '@/lib/format';
 import { buildValuedHoldings, toTwd } from '@/lib/portfolio';
 import {
   getAccountBalances,
+  getCorporateActions,
+  getDividendDismissals,
   getLatestPrices,
   getSession,
   getStocks,
@@ -110,6 +121,18 @@ export default async function StocksPage({
   const brokerAccounts = balances.filter((b) => b.type === 'broker_cash' && !b.is_archived);
   const stockMap = new Map(stocks.map((s) => [s.symbol, s]));
 
+  /*
+   * 待確認配息:只看自己的交易 —— 只能替自己記錄,全家視角也一樣。
+   * 要先知道有哪些代號才查公告,所以這組查詢排在第一批之後。
+   */
+  const ownTxns = transactions.filter((t) => t.owner_id === session.userId);
+  const [actions, dismissals] = await Promise.all([
+    getCorporateActions([...new Set(ownTxns.map((t) => t.symbol))]),
+    getDividendDismissals(),
+  ]);
+  const suggestions = dividendSuggestions(ownTxns, actions, dismissals, todayInTaipei());
+  const names = new Map(stocks.filter((st) => st.name).map((st) => [st.symbol, st.name as string]));
+
   const totalMarketValue = holdings.reduce((sum, h) => sum + h.marketValueTwd, 0);
   // 合計一定要換算成台幣再相加 — 台股與美股的損益不同幣別,直接加會得出無意義的數字
   const totalPnLTwd = holdings.reduce(
@@ -133,6 +156,12 @@ export default async function StocksPage({
       <Suspense fallback={<div className="mb-4 h-9" />}>
         <FilterBar scope={scope} showScopeToggle={session.members.length > 1} showRange={false} />
       </Suspense>
+
+      <DividendSuggestions
+        suggestions={suggestions}
+        names={names}
+        brokerAccounts={brokerAccounts}
+      />
 
       {/* 目前持股 ------------------------------------------------------- */}
       <section className="card-flush overflow-hidden">

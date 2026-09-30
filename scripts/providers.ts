@@ -302,6 +302,99 @@ export async function fetchTwHolidays(): Promise<HolidayRow[]> {
 }
 
 // ---------------------------------------------------------------------------
+// 台股 — 除權除息預告(「待確認配息」用)
+// ---------------------------------------------------------------------------
+
+const TWSE_EXRIGHTS_URL = 'https://openapi.twse.com.tw/v1/exchangeReport/TWT48U_ALL';
+const TPEX_EXRIGHTS_URL = 'https://www.tpex.org.tw/openapi/v1/tpex_exright_prepost';
+
+export interface CorporateActionRow {
+  market: 'TW' | 'US';
+  symbol: string;
+  ex_date: string;
+  /** 每股現金股利;有除息但金額還沒公布是 null(ETF 常常除息前幾天才公布) */
+  cash_dividend: number | null;
+  /** 每股配幾股:0.05 = 每千股配 50 股。沒有配股是 null */
+  stock_ratio: number | null;
+}
+
+/**
+ * 預告表的一列 → 一筆除權息。
+ *
+ * - 類型有「息」才有現金股利;金額欄是空白或文字(櫃買會寫「尚未公告」)時記成 null
+ * - 配股率大於 0 才算配股
+ * - 兩者都沒有的(只有「權」而且是現金增資認股)不是股利,略過
+ */
+function toCorporateAction(
+  symbol: string,
+  rocDate: string,
+  kind: string,
+  cashRaw: unknown,
+  ratioRaw: unknown
+): CorporateActionRow | null {
+  const code = symbol.trim();
+  const exDate = rocToIso(rocDate);
+  if (!code || !exDate) return null;
+
+  const hasCash = kind.includes('息');
+  const cash = hasCash ? toNumber(cashRaw) : null;
+  const ratio = toNumber(ratioRaw);
+  const stock = ratio !== null && ratio > 0 ? ratio : null;
+
+  if (!hasCash && stock === null) return null;
+  return {
+    market: 'TW',
+    symbol: code,
+    ex_date: exDate,
+    cash_dividend: cash !== null && cash > 0 ? cash : null,
+    stock_ratio: stock,
+  };
+}
+
+interface TwseExRightsRow {
+  Date?: string;
+  Code?: string;
+  Exdividend?: string;
+  StockDividendRatio?: string;
+  CashDividend?: string;
+}
+
+/** 證交所「除權除息預告表」:大約前一週到後一個月的上市股票與 ETF */
+export async function fetchTwseCorporateActions(): Promise<CorporateActionRow[]> {
+  const rows = await fetchJson<TwseExRightsRow[]>(TWSE_EXRIGHTS_URL);
+  return rows
+    .map((r) =>
+      toCorporateAction(r.Code ?? '', r.Date ?? '', r.Exdividend ?? '', r.CashDividend, r.StockDividendRatio)
+    )
+    .filter((r): r is CorporateActionRow => r !== null);
+}
+
+interface TpexExRightsRow {
+  // 欄位名稱就是拼成 Rrights,不是打錯
+  ExRrightsExDividendDate?: string;
+  SecuritiesCompanyCode?: string;
+  ExRrightsExDividend?: string;
+  StockDividendRatio?: string;
+  CashDividend?: string;
+}
+
+/** 櫃買中心「除權除息預告表」:上櫃股票與債券 ETF(例如 00687B) */
+export async function fetchTpexCorporateActions(): Promise<CorporateActionRow[]> {
+  const rows = await fetchJson<TpexExRightsRow[]>(TPEX_EXRIGHTS_URL);
+  return rows
+    .map((r) =>
+      toCorporateAction(
+        r.SecuritiesCompanyCode ?? '',
+        r.ExRrightsExDividendDate ?? '',
+        r.ExRrightsExDividend ?? '',
+        r.CashDividend,
+        r.StockDividendRatio
+      )
+    )
+    .filter((r): r is CorporateActionRow => r !== null);
+}
+
+// ---------------------------------------------------------------------------
 // 歷史收盤價(回填用)
 // ---------------------------------------------------------------------------
 

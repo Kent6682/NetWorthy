@@ -7,8 +7,10 @@ import { test, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   fetchTwseCloses,
+  fetchTwseCorporateActions,
   fetchTwseDaily,
   fetchTpexCloses,
+  fetchTpexCorporateActions,
   fetchTpexDaily,
   fetchUsClose,
   isCloseSettled,
@@ -495,4 +497,55 @@ test('美股:以紐約時間判斷,16:15 以後才算定案', () => {
 
 test('未來的日期一律不收(時區算錯時的保險)', () => {
   assert.equal(isCloseSettled('TW', '2026-10-01', Date.parse('2026-09-30T20:00:00+08:00')), false);
+});
+
+// --- 除權除息預告 -----------------------------------------------------------
+
+test('證交所除權息預告:現金、配股、還沒公布金額、現金增資要濾掉', async () => {
+  stubJson([
+    { Date: '1150924', Code: '1235', Exdividend: '權息', StockDividendRatio: '0.04999999', CashDividend: '0.500000' },
+    { Date: '1151008', Code: '00400A', Exdividend: '息', StockDividendRatio: '', CashDividend: '' },
+    { Date: '1151012', Code: '1449', Exdividend: '權', StockDividendRatio: '0.00999999', CashDividend: '0' },
+    // 只有現金增資認股,不是股利
+    { Date: '1151013', Code: '1727', Exdividend: '權', StockDividendRatio: '', SubscriptionRatio: '0.10779602', CashDividend: '0' },
+  ]);
+  const rows = await fetchTwseCorporateActions();
+  const by = new Map(rows.map((r) => [r.symbol, r]));
+
+  assert.deepEqual(by.get('1235'), {
+    market: 'TW',
+    symbol: '1235',
+    ex_date: '2026-09-24',
+    cash_dividend: 0.5,
+    stock_ratio: 0.04999999,
+  });
+  assert.equal(by.get('00400A')?.cash_dividend, null, 'ETF 金額還沒公布');
+  assert.equal(by.get('1449')?.cash_dividend, null);
+  assert.equal(by.get('1449')?.stock_ratio, 0.00999999);
+  assert.equal(by.has('1727'), false);
+});
+
+test('櫃買除權息預告:欄位名稱不同,金額欄可能是文字', async () => {
+  stubJson([
+    {
+      ExRrightsExDividendDate: '1150921',
+      SecuritiesCompanyCode: '00697B',
+      ExRrightsExDividend: '除息',
+      StockDividendRatio: '0.00000000',
+      CashDividend: '0.31000000',
+    },
+    {
+      ExRrightsExDividendDate: '1151016',
+      SecuritiesCompanyCode: '00687B',
+      ExRrightsExDividend: '除息',
+      StockDividendRatio: '0.00000000',
+      CashDividend: '尚未公告',
+    },
+  ]);
+  const rows = await fetchTpexCorporateActions();
+  const by = new Map(rows.map((r) => [r.symbol, r]));
+  assert.equal(by.get('00697B')?.cash_dividend, 0.31);
+  assert.equal(by.get('00697B')?.stock_ratio, null, '配股率 0 代表沒有配股');
+  assert.equal(by.get('00687B')?.cash_dividend, null);
+  assert.equal(by.get('00687B')?.ex_date, '2026-10-16');
 });

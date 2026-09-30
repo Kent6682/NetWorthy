@@ -1,6 +1,7 @@
 import { cache } from 'react';
 import { selectAll } from './paginate.ts';
 import { createClient } from './supabase/server.ts';
+import type { CorporateAction, DividendDismissal } from './dividends.ts';
 import type { StockTransaction } from './holdings.ts';
 import type { TradeRow } from './pnl.ts';
 import type { AccountBalance, LatestPrice, NetWorthSnapshot, Profile, Stock } from './types.ts';
@@ -321,4 +322,40 @@ export async function getSnapshots(
     const scoped = scope === 'family' ? query.is('owner_id', null) : query.eq('owner_id', userId);
     return scoped.order('snapshot_date').order('id').range(a, b);
   });
+}
+
+/** 除權息公告:只撈這些代號的,「待確認配息」用 */
+export async function getCorporateActions(symbols: string[]): Promise<CorporateAction[]> {
+  if (symbols.length === 0) return [];
+  const supabase = await createClient();
+
+  const rows = await selectAll<CorporateAction>((a, b) =>
+    supabase
+      .from('corporate_actions')
+      .select('market, symbol, ex_date, cash_dividend, stock_ratio')
+      .in('symbol', symbols)
+      .order('ex_date')
+      .order('symbol')
+      .range(a, b)
+  );
+  return rows.map((r) => ({
+    ...r,
+    cash_dividend: r.cash_dividend === null ? null : Number(r.cash_dividend),
+    stock_ratio: r.stock_ratio === null ? null : Number(r.stock_ratio),
+  }));
+}
+
+/** 自己按過「略過」的配息提示(RLS 只給看自己的) */
+export async function getDividendDismissals(): Promise<DividendDismissal[]> {
+  const supabase = await createClient();
+  const rows = await selectAll<DividendDismissal>((a, b) =>
+    supabase
+      .from('dividend_dismissals')
+      .select('symbol, ex_date, kind')
+      .order('ex_date')
+      .order('symbol')
+      .order('kind')
+      .range(a, b)
+  );
+  return rows;
 }

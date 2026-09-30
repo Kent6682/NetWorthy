@@ -93,4 +93,22 @@ values ('aaaaaaaa-0000-0000-0000-000000000001','deposit', 500, '2026-03-01');
 delete from public.stock_transactions where id = 'bbbbbbbb-0000-0000-0000-000000000003';
 select count(*) as "筆數(應為1)", min(from_date) as "起點(應為2026-03-01)" from public.snapshot_rebuild_requests;
 
+
+\echo '--- 15. 現金股利:在發放日存入 股數 × 每股配息 − 二代健保 ---'
+insert into public.stock_transactions (id, owner_id, account_id, symbol, type, shares, price, fee, transaction_date, pay_date)
+values ('bbbbbbbb-0000-0000-0000-000000000004','11111111-1111-1111-1111-111111111111','aaaaaaaa-0000-0000-0000-000000000002','2330','dividend', 1000, 4.5, 0, '2026-06-12', '2026-07-10');
+select type, amount as "金額(應為4500)", transaction_date as "日期(應為2026-07-10)", note
+from public.account_transactions where stock_transaction_id = 'bbbbbbbb-0000-0000-0000-000000000004';
+
+\echo '--- 16. 配股:不連動券商帳戶 ---'
+insert into public.stock_transactions (id, owner_id, account_id, symbol, type, shares, price, fee, transaction_date)
+values ('bbbbbbbb-0000-0000-0000-000000000005','11111111-1111-1111-1111-111111111111','aaaaaaaa-0000-0000-0000-000000000002','2330','stock_dividend', 50, 0, 0, '2026-06-12');
+select count(*) as "連動筆數(應為0)" from public.account_transactions where stock_transaction_id = 'bbbbbbbb-0000-0000-0000-000000000005';
+
+\echo '--- 17. 發放日不能早於除息日(預期會噴錯)---'
+savepoint sp4;
+insert into public.stock_transactions (owner_id, symbol, type, shares, price, fee, transaction_date, pay_date)
+values ('11111111-1111-1111-1111-111111111111','2330','dividend', 1, 1, 0, '2026-06-12', '2026-06-01');
+rollback to sp4;
+
 rollback;

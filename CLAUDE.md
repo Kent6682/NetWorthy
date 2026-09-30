@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 npm install
 npm run dev      # http://localhost:3000
 npm run build
-npm test         # node --test,146 個測試,不連網(但要先 npm install)
+npm test         # node --test,171 個測試,不連網(但要先 npm install)
 npm run sync     # 手動跑一次每日同步(需 SUPABASE_SERVICE_ROLE_KEY)
 npm run backfill # 從第一筆交易重算所有歷史快照並補抓歷史價格(同上,需金鑰)
 ```
@@ -46,13 +46,16 @@ node --test --experimental-strip-types --test-name-pattern="零股" tests/holdin
 1. **帳戶餘額 = 資料庫算的。** `accounts` 沒有餘額欄位。`account_transactions.signed_amount` 是 generated column(依 `type` 決定正負),`account_balances` view 把它加總。要改餘額只能新增一筆流水,不能改總額。
 2. **券商現金 = 觸發器算的。** `sync_broker_cash()` 掛在 `stock_transactions` 的 insert/update/delete 上,買進產生 `withdraw`、賣出產生 `deposit`,`initial`(期初持股)不連動。這些列帶有 `stock_transaction_id`,**永遠不要手動新增或修改** —— 觸發器每次都會先把舊的刪掉重建。
 3. **持股均價 = `lib/holdings.ts` 算的。** 移動加權平均法,網站與同步腳本共用這一份。排序規則(交易日 → 同日 initial 優先 → created_at → id)關係到結果可重現,改動前先看 `tests/holdings.test.ts` 的 14 個案例。
+   五種交易:`initial`、`buy`、`sell`、`dividend`(現金股利:持股與成本不變,實收計入 `dividendIncome`)、`stock_dividend`(配股:股數增加、總成本不變)。**股利不拿來扣成本**(均價要跟券商一致,長期持有會扣成負數),而是**算進已實現**:已實現 = 買賣的 `realizedPnL` + `dividendIncome`,畫面上拆開顯示。現金股利的 `transaction_date` 是除息日(盈虧算在這天),`pay_date` 是發放日(只影響券商帳戶入帳日)。
    已實現損益的合計要用 `computeRealizedTwd()`,**不能**從 `buildValuedHoldings()` 加總 —— 那份清單濾掉了股數 0 的標的,而全部賣光的那一檔正是已實現損益的來源。
 
-4. **每日盈虧 = `lib/pnl.ts` 算的。** 公式是「股票市值變化 − 當日買進金額 + 當日賣出金額 − 手續費與稅」。**基準刻意是股票市值而不是總資產** —— 用總資產的話,沒勾選「同步更新券商帳戶餘額」的買賣會憑空生出資產(股票增加、現金卻沒減少)。導入既有持股(`initial`)那天不計盈虧,那天既沒賺也沒賠。現金完全不參與。
+4. **每日盈虧 = `lib/pnl.ts` 算的。** 公式是「股票市值變化 − 當日買進金額 + 當日賣出金額 − 手續費與稅」。**基準刻意是股票市值而不是總資產** —— 用總資產的話,沒勾選「同步更新券商帳戶餘額」的買賣會憑空生出資產(股票增加、現金卻沒減少)。導入既有持股(`initial`)那天不計盈虧,那天既沒賺也沒賠。現金股利的部位變動是負的實收(除息價差被抵銷),配股是 0(股數本身就在市值裡)。現金完全不參與。
 
-5. **年度損益 = `lib/yearly.ts` 算的。** 每年結算「期末股票市值 − 期初 − 買入(含期初持股)+ 賣出實收」,扣掉當年已實現就是當年未實現 —— 未實現是**當年變動**,不是年底帳面,所以各年能直接相加。首頁「今年未實現 / 今年已實現」兩格讀的是這裡,不是 `computeTotals()`。
+5. **年度損益 = `lib/yearly.ts` 算的。** 每年結算「期末股票市值 − 期初 − 買入(含期初持股)+ 賣出實收 + 股利實收」,扣掉當年已實現(買賣 + 股利)就是當年未實現 —— 未實現是**當年變動**,不是年底帳面,所以各年能直接相加。首頁「今年未實現 / 今年已實現」兩格讀的是這裡,不是 `computeTotals()`。
 
 `stocks` 與 `market_symbols` 是兩回事,不要混用:`stocks` 只放這個家庭真的交易過的標的(被 `stock_transactions` 以外鍵參照),`market_symbols` 是每日同步整批 upsert 進來的**全市場代號字典**,只服務「新增交易時打代號自動帶出商品名稱」這件事,而且只新增不刪除。
+
+`corporate_actions` 是每日同步從證交所 `TWT48U_ALL` 與櫃買 `tpex_exright_prepost` 寫進來的除權息預告(只增不刪,2026-10 起累積);金額未公布是 null,且 null 不能蓋掉已公布的金額。`lib/dividends.ts` 的 `dividendSuggestions()` 用它算「待確認配息」:除息日已到、**除息日前一天收盤時**有持股、還沒記錄、沒按略過(`dividend_dismissals`,RLS 只給本人)。只看自己的交易。
 
 `market_holidays` 同樣是每日同步寫進來的公用資料:證交所當年度行事曆裡**沒有交易**的日子(「開始交易日」「最後交易日」有開盤,要濾掉)。日曆靠它標節日名稱,`computeDailyPnl()` 也優先信它,不再只靠「那天沒收盤價」去猜休市。
 
