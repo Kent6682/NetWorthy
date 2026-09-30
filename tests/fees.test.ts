@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { estimateTwFee, twSellTaxRate } from '../lib/fees.ts';
+import { estimateDividendDeduction, estimateTwFee, twSellTaxRate } from '../lib/fees.ts';
 
 test('買進只有手續費,無條件捨去', () => {
   // 9/24 實際那筆:16,000 × 124.4 = 1,990,400 × 0.1425% = 2,836.32
@@ -43,4 +43,24 @@ test('債券 ETF 停徵期過後改收 0.1%', () => {
 test('股數或價格還沒填時不估算', () => {
   assert.equal(estimateTwFee('buy', '2330', 0, 1225, '2026-09-24'), null);
   assert.equal(estimateTwFee('buy', '2330', 1000, NaN, '2026-09-24'), null);
+});
+
+test('現金股利:2 萬元以上扣二代健保 2.11%,四捨五入到元', () => {
+  // 00712 6/17:250,000 × 0.235 = 58,750 → 1,239.625 → 1,240
+  assert.deepEqual(estimateDividendDeduction('TW', 58750), { amount: 1240, label: '二代健保 2.11%' });
+  assert.equal(estimateDividendDeduction('TW', 92400)?.amount, 1950);
+  assert.equal(estimateDividendDeduction('TW', 20000)?.amount, 422, '剛好 2 萬也要扣');
+});
+
+test('現金股利:未滿 2 萬元不扣', () => {
+  assert.equal(estimateDividendDeduction('TW', 19999)?.amount, 0);
+});
+
+test('美股股利:預扣 30%', () => {
+  assert.equal(estimateDividendDeduction('US', 26.25)?.amount, 7.88);
+});
+
+test('股數或每股配息還沒填時不估算', () => {
+  assert.equal(estimateDividendDeduction('TW', 0), null);
+  assert.equal(estimateDividendDeduction('TW', NaN), null);
 });

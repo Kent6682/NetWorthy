@@ -16,10 +16,36 @@ import {
   ownerIdsForScope,
   parseScope,
 } from '@/lib/queries';
-import type { StockTransaction } from '@/lib/holdings';
+import { dividendNet, type StockTransaction } from '@/lib/holdings';
 import { STOCK_TXN_LABEL, type AccountBalance, type Stock } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
+
+/** 交易類型的顏色:買進藍、賣出橘、股利與配股琥珀,期初持股不上色 */
+function typeColor(type: StockTransaction['type']): string {
+  if (type === 'buy') return 'var(--series-1)';
+  if (type === 'sell') return 'var(--series-2)';
+  if (type === 'dividend' || type === 'stock_dividend') return 'var(--series-4)';
+  return 'var(--text-secondary)';
+}
+
+/** 交易紀錄的說明文字 —— 股利與配股的欄位意思跟買賣不一樣 */
+function txnSubtitle(t: StockTransaction): string {
+  if (t.type === 'stock_dividend') return `配到 ${formatShares(t.shares)} 股`;
+  if (t.type === 'dividend') {
+    const pay = t.pay_date ? ` ・ 發放 ${formatDate(t.pay_date)}` : '';
+    const fee = t.fee > 0 ? ` ・ 扣 ${formatPrice(t.fee)}` : '';
+    return `${formatShares(t.shares)} 股 × 每股 ${t.price}${fee}${pay}`;
+  }
+  return `${formatShares(t.shares)} 股 × ${formatPrice(t.price)}${t.fee > 0 ? ` ・ 費用 ${formatPrice(t.fee)}` : ''}`;
+}
+
+/** 金額欄:股利是實收,配股沒有金額 */
+function txnAmount(t: StockTransaction, currency: 'TWD' | 'USD'): string {
+  if (t.type === 'stock_dividend') return '—';
+  if (t.type === 'dividend') return formatMoney(dividendNet(t), currency);
+  return formatMoney(t.shares * t.price, currency);
+}
 
 /** 列表每一列的操作:編輯與兩段式刪除,只有自己的交易才有 */
 function RowActions({
@@ -45,6 +71,7 @@ function RowActions({
           price: txn.price,
           fee: txn.fee,
           transaction_date: txn.transaction_date,
+          pay_date: txn.pay_date ?? null,
           account_id: txn.account_id ?? null,
         }}
       />
@@ -154,11 +181,16 @@ export default async function StocksPage({
                     </span>
                   }
                   meta={
-                    h.lastPrice === null ? (
-                      <span>報價未同步,市值暫以成本價估算</span>
-                    ) : (
-                      <span>現價 {formatPrice(h.lastPrice)}</span>
-                    )
+                    <>
+                      {h.lastPrice === null ? (
+                        <span>報價未同步,市值暫以成本價估算</span>
+                      ) : (
+                        <span>現價 {formatPrice(h.lastPrice)}</span>
+                      )}
+                      {h.dividendIncome > 0 && (
+                        <span> ・ 累計股利 {formatMoney(h.dividendIncome, h.currency)}</span>
+                      )}
+                    </>
                   }
                 />
               ))}
@@ -175,6 +207,7 @@ export default async function StocksPage({
                     <th className="px-3 py-2 text-right font-normal">均價</th>
                     <th className="px-3 py-2 text-right font-normal">現價</th>
                     <th className="px-3 py-2 text-right font-normal">市值</th>
+                    <th className="px-3 py-2 text-right font-normal">累計股利</th>
                     <th className="px-5 py-2 text-right font-normal">未實現損益</th>
                   </tr>
                 </thead>
@@ -212,6 +245,9 @@ export default async function StocksPage({
                       <td className="px-3 py-2.5 text-right">
                         {formatMoney(h.marketValue, h.currency)}
                       </td>
+                      <td className="px-3 py-2.5 text-right" style={{ color: 'var(--text-secondary)' }}>
+                        {h.dividendIncome > 0 ? formatMoney(h.dividendIncome, h.currency) : '—'}
+                      </td>
                       <td
                         className={`px-5 py-2.5 text-right ${h.unrealizedPnL >= 0 ? 'pos' : 'neg'}`}
                       >
@@ -246,23 +282,14 @@ export default async function StocksPage({
                     key={t.id}
                     title={
                       <>
-                        <span
-                          style={{
-                            color:
-                              t.type === 'buy'
-                                ? 'var(--series-1)'
-                                : t.type === 'sell'
-                                  ? 'var(--series-2)'
-                                  : 'var(--text-secondary)',
-                          }}
-                        >
+                        <span style={{ color: typeColor(t.type) }}>
                           {STOCK_TXN_LABEL[t.type]}
                         </span>
                         <span className="ml-2">{t.symbol}</span>
                       </>
                     }
-                    subtitle={`${formatShares(t.shares)} 股 × ${formatPrice(t.price)}${t.fee > 0 ? ` ・ 費用 ${formatPrice(t.fee)}` : ''}`}
-                    value={formatMoney(t.shares * t.price, currency)}
+                    subtitle={txnSubtitle(t)}
+                    value={txnAmount(t, currency)}
                     meta={
                       <>
                         {formatDate(t.transaction_date)}
@@ -307,16 +334,7 @@ export default async function StocksPage({
                       <tr key={t.id} style={{ borderTop: '1px solid var(--divider)' }}>
                         <td className="px-5 py-2.5">{formatDate(t.transaction_date)}</td>
                         <td className="px-3 py-2.5">
-                          <span
-                            style={{
-                              color:
-                                t.type === 'buy'
-                                  ? 'var(--series-1)'
-                                  : t.type === 'sell'
-                                    ? 'var(--series-2)'
-                                    : 'var(--text-secondary)',
-                            }}
-                          >
+                          <span style={{ color: typeColor(t.type) }}>
                             {STOCK_TXN_LABEL[t.type]}
                           </span>
                         </td>
@@ -327,16 +345,20 @@ export default async function StocksPage({
                           </td>
                         )}
                         <td className="px-3 py-2.5 text-right">{formatShares(t.shares)}</td>
-                        <td className="px-3 py-2.5 text-right">{formatPrice(t.price)}</td>
+                        <td className="px-3 py-2.5 text-right">
+                          {t.type === 'stock_dividend'
+                            ? '—'
+                            : t.type === 'dividend'
+                              ? t.price
+                              : formatPrice(t.price)}
+                        </td>
                         <td
                           className="px-3 py-2.5 text-right"
                           style={{ color: 'var(--text-muted)' }}
                         >
                           {t.fee > 0 ? formatPrice(t.fee) : '—'}
                         </td>
-                        <td className="px-3 py-2.5 text-right">
-                          {formatMoney(t.shares * t.price, currency)}
-                        </td>
+                        <td className="px-3 py-2.5 text-right">{txnAmount(t, currency)}</td>
                         <td className="px-5 py-2.5 text-right">
                           {isMine && (
                             <RowActions

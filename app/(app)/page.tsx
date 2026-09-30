@@ -33,6 +33,12 @@ import { computeYearly, sumYears, yearBoundaries } from '@/lib/yearly';
 export const dynamic = 'force-dynamic';
 
 /** 統計方塊 — 手機 2×2,桌機 4 欄 */
+/** 帶正負號的金額:+241,904 / −364,785 */
+function signedMoney(value: number): string {
+  const rounded = Math.round(value);
+  return `${rounded > 0 ? '+' : rounded < 0 ? '−' : ''}${Math.abs(rounded).toLocaleString('en-US')}`;
+}
+
 /** 損益的顏色:賺紅、賠綠,剛好 0 不上色 —— 0 塗成紅色看起來像賺了錢 */
 function toneOf(value: number): 'positive' | 'negative' | undefined {
   const rounded = Math.round(value);
@@ -63,7 +69,7 @@ function StatTile({
         {value}
       </div>
       {hint && (
-        <div className="mt-0.5 truncate text-xs" style={{ color: 'var(--text-muted)' }}>
+        <div className="mt-0.5 text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>
           {hint}
         </div>
       )}
@@ -235,7 +241,11 @@ export default async function DashboardPage({
         <StatTile
           label="今年已實現損益"
           value={formatMoney(thisYear?.realized ?? 0)}
-          hint={`${today.slice(0, 4)} 年賣出結算`}
+          hint={
+            thisYear && Math.round(thisYear.dividends) !== 0
+              ? `買賣 ${signedMoney(thisYear.tradingRealized)} ＋ 股利 ${signedMoney(thisYear.dividends)}`
+              : `${today.slice(0, 4)} 年賣出結算`
+          }
           tone={toneOf(thisYear?.realized ?? 0)}
         />
       </div>

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   calculateHolding,
   calculateHoldings,
+  dividendNet,
   mergeHoldingsBySymbol,
   type StockTransaction,
 } from '../lib/holdings.ts';
@@ -177,4 +178,60 @@ test('零股(小數股數)計算正確', () => {
 
 test('沒有交易紀錄時回傳 null', () => {
   assert.equal(calculateHolding([]), null);
+});
+
+// --- 配息與配股 ------------------------------------------------------------
+
+test('現金股利:持股與成本都不變,實收計入股利收入', () => {
+  const h = calculateHolding([
+    txn({ id: '1', symbol: '00712', type: 'initial', shares: 250000, price: 8.94, transaction_date: '2026-05-13' }),
+    txn({ id: '2', symbol: '00712', type: 'dividend', shares: 250000, price: 0.235, fee: 1240, transaction_date: '2026-06-17' }),
+    txn({ id: '3', symbol: '00712', type: 'dividend', shares: 250000, price: 0.2, fee: 1055, transaction_date: '2026-09-17' }),
+  ]);
+  assert.equal(h?.shares, 250000);
+  assert.equal(h?.avgCost, 8.94, '股利不拿來扣成本,均價要跟券商一致');
+  assert.equal(h?.totalCost, 2235000);
+  assert.equal(h?.dividendIncome, 57510 + 48945);
+  assert.equal(h?.realizedPnL, 0, '買賣的已實現不含股利');
+});
+
+test('現金股利:除息後才賣光的,股利照樣算', () => {
+  // 00687B:9/16 除息、9/24 全部賣掉
+  const h = calculateHolding([
+    txn({ id: '1', symbol: '00687B', type: 'initial', shares: 77000, price: 31, transaction_date: '2026-05-13' }),
+    txn({ id: '2', symbol: '00687B', type: 'dividend', shares: 77000, price: 0.335, fee: 544, transaction_date: '2026-09-16' }),
+    txn({ id: '3', symbol: '00687B', type: 'sell', shares: 77000, price: 26.3, fee: 2885, transaction_date: '2026-09-24' }),
+  ]);
+  assert.equal(h?.shares, 0);
+  assert.equal(h?.realizedPnL, -364785);
+  assert.equal(h?.dividendIncome, 25251);
+});
+
+test('配股:股數增加、總成本不變,均價下降', () => {
+  // 2542 持有 23,100 股、均價 42.70,每千股配 50 股 → 1,155 股
+  const h = calculateHolding([
+    txn({ id: '1', symbol: '2542', type: 'initial', shares: 23100, price: 42.7, transaction_date: '2026-05-13' }),
+    txn({ id: '2', symbol: '2542', type: 'stock_dividend', shares: 1155, price: 0, transaction_date: '2026-09-23' }),
+  ]);
+  assert.equal(h?.shares, 24255);
+  assert.equal(h?.totalCost, 986370);
+  assert.equal(h?.avgCost, 40.6667);
+  assert.equal(h?.dividendIncome, 0);
+});
+
+test('配股之後賣出:移出的成本用配股後的均價', () => {
+  const h = calculateHolding([
+    txn({ id: '1', type: 'buy', shares: 1000, price: 100, transaction_date: '2026-01-02' }),
+    txn({ id: '2', type: 'stock_dividend', shares: 1000, price: 0, transaction_date: '2026-06-01' }),
+    txn({ id: '3', type: 'sell', shares: 1000, price: 60, transaction_date: '2026-07-01' }),
+  ]);
+  // 2,000 股、成本 100,000、均價 50;賣 1,000 股 @60 → 已實現 +10,000
+  assert.equal(h?.realizedPnL, 10000);
+  assert.equal(h?.shares, 1000);
+  assert.equal(h?.avgCost, 50);
+});
+
+test('股利實收不會是負的(扣款填得比股利還多時)', () => {
+  assert.equal(dividendNet({ shares: 10, price: 0.1, fee: 50 }), 0);
+  assert.equal(dividendNet({ shares: 250000, price: 0.2, fee: 1055 }), 48945);
 });

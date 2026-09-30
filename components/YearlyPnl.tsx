@@ -26,6 +26,7 @@ function Breakdown({ row }: { row: YearRow }) {
     ['− 期初股票市值', row.startValue],
     ['− 買入(含期初持股與手續費)', row.bought],
     ['＋ 賣出實收(已扣費稅)', row.sold],
+    ['＋ 股利實收(已扣二代健保等)', row.dividends],
   ];
 
   return (
@@ -44,10 +45,45 @@ function Breakdown({ row }: { row: YearRow }) {
         <span>其中已實現</span>
         <span className={`tnum ${tone(row.realized)}`}>{signed(row.realized)}</span>
       </div>
+      {Math.round(row.dividends) !== 0 && (
+        <>
+          <div className="yearly-line" data-sub="deep">
+            <span>買賣</span>
+            <span className={`tnum ${tone(row.tradingRealized)}`}>{signed(row.tradingRealized)}</span>
+          </div>
+          <div className="yearly-line" data-sub="deep">
+            <span>股利</span>
+            <span className={`tnum ${tone(row.dividends)}`}>{signed(row.dividends)}</span>
+          </div>
+        </>
+      )}
       <div className="yearly-line" data-sub="true">
         <span>其中未實現</span>
         <span className={`tnum ${tone(row.unrealized)}`}>{signed(row.unrealized)}</span>
       </div>
+
+      {(row.tax.cashGross > 0 || row.tax.stockPar > 0) && (
+        <div className="yearly-tax">
+          <div className="yearly-tax-title">
+            {row.year === null ? '股利所得合計' : `${row.year} 股利所得`}(報稅核對用)
+          </div>
+          <div className="yearly-line">
+            <span>現金股利總額</span>
+            <span className="tnum">{formatNumber(Math.round(row.tax.cashGross))}</span>
+          </div>
+          <div className="yearly-line">
+            <span>股票股利(以面額 10 元計)</span>
+            <span className="tnum">{formatNumber(Math.round(row.tax.stockPar))}</span>
+          </div>
+          <div className="yearly-line">
+            <span>二代健保與預扣稅</span>
+            <span className="tnum">{formatNumber(Math.round(row.tax.deductions))}</span>
+          </div>
+          <p className="yearly-tax-note">
+            ETF 的配息含股利、利息與收益平準金,各自課稅方式不同;報稅以國稅局的所得資料為準,這裡用來核對有沒有漏列。
+          </p>
+        </div>
+      )}
     </div>
   );
 }

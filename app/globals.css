@@ -535,6 +535,12 @@ a.cal-cell:focus-visible {
   background: var(--text-muted);
 }
 
+/* 除息、除權(現金股利或配股):菱形,形狀跟買賣不同,色盲也分得出來 */
+.cal-mark[data-kind='dividend'] {
+  background: var(--series-4);
+  transform: rotate(45deg) scale(0.85);
+}
+
 /* 導入日沒有盈虧可算,用一個淡淡的字標示,不要讓格子看起來像沒資料 */
 .cal-imported {
   font-size: 0.625rem;
@@ -932,6 +938,34 @@ a.cal-cell:focus-visible {
 .yearly-line[data-sub='true'] {
   padding-left: 12px;
   font-size: 0.75rem;
+}
+
+/* 已實現底下再拆「買賣 / 股利」 */
+.yearly-line[data-sub='deep'] {
+  padding-left: 24px;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+/* 報稅核對用的股利所得:跟上面的損益算式分開,中間一條細線 */
+.yearly-tax {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--baseline);
+}
+
+.yearly-tax-title {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 2px;
+}
+
+.yearly-tax-note {
+  margin-top: 4px;
+  font-size: 0.6875rem;
+  line-height: 1.5;
+  color: var(--text-muted);
 }
 
 /* ---------------------------------------------------------------------------

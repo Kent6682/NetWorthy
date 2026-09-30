@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import { parseNumberInput } from '@/lib/format';
 import { createClient } from '@/lib/supabase/server';
+import type { StockTxnType } from '@/lib/holdings';
 
 type Result = { error?: string; ok?: boolean };
 
@@ -16,41 +17,57 @@ interface StockTxnFields {
   market: 'TW' | 'US';
   symbol: string;
   name: string | null;
-  type: 'initial' | 'buy' | 'sell';
+  type: StockTxnType;
   shares: number;
   price: number;
   fee: number;
   transactionDate: string;
+  /** 現金股利的發放日,其他類型一律 null */
+  payDate: string | null;
   accountId: string | null;
 }
+
+const STOCK_TXN_TYPES: StockTxnType[] = ['initial', 'buy', 'sell', 'dividend', 'stock_dividend'];
 
 /** 新增與編輯共用的表單解析與驗證 */
 function parseStockForm(formData: FormData): { error: string } | StockTxnFields {
   const market = String(formData.get('market') ?? 'TW');
   const symbol = normalizeSymbol(String(formData.get('symbol') ?? ''), market);
   const name = String(formData.get('name') ?? '').trim() || null;
-  const type = String(formData.get('type') ?? '');
+  const type = String(formData.get('type') ?? '') as StockTxnType;
   // 股數與手續費的輸入框帶千分位,要先拿掉逗號
   const shares = parseNumberInput(String(formData.get('shares') ?? ''));
   const price = parseNumberInput(String(formData.get('price') ?? ''));
   const feeRaw = parseNumberInput(String(formData.get('fee') ?? ''));
   const fee = Number.isNaN(feeRaw) ? 0 : feeRaw;
   const transactionDate = String(formData.get('transaction_date') ?? '');
+  const payDateRaw = String(formData.get('pay_date') ?? '').trim();
   const linkAccount = formData.get('link_account') === 'on';
   const accountIdRaw = String(formData.get('account_id') ?? '');
 
   if (!symbol) return { error: '請填寫股票代號' };
   if (market !== 'TW' && market !== 'US') return { error: '請選擇市場' };
-  if (type !== 'initial' && type !== 'buy' && type !== 'sell') return { error: '請選擇交易類型' };
-  if (!Number.isFinite(shares) || shares <= 0) return { error: '股數必須大於 0' };
-  if (!Number.isFinite(price) || price < 0) return { error: '價格不能是負數' };
-  if (!Number.isFinite(fee) || fee < 0) return { error: '手續費不能是負數' };
-  if (!transactionDate) return { error: '請填寫交易日期' };
+  if (!STOCK_TXN_TYPES.includes(type)) return { error: '請選擇交易類型' };
+  if (!Number.isFinite(shares) || shares <= 0) {
+    return { error: type === 'stock_dividend' ? '配到的股數必須大於 0' : '股數必須大於 0' };
+  }
+  if (!transactionDate) return { error: '請填寫日期' };
 
-  // 期初持股不連動帳戶;買賣則看使用者有沒有勾選連動
-  const accountId = type === 'initial' || !linkAccount ? null : accountIdRaw || null;
-  if (type !== 'initial' && linkAccount && !accountId) {
-    return { error: '要連動帳戶餘額的話,請選擇交割用的券商帳戶' };
+  // 配股沒有價格、費用與現金進出;其他類型才檢查這些欄位
+  if (type !== 'stock_dividend') {
+    if (!Number.isFinite(price) || price < 0) return { error: '價格不能是負數' };
+    if (type === 'dividend' && price <= 0) return { error: '請填寫每股配息' };
+    if (!Number.isFinite(fee) || fee < 0) return { error: '費用不能是負數' };
+  }
+
+  const payDate = type === 'dividend' && payDateRaw ? payDateRaw : null;
+  if (payDate && payDate < transactionDate) return { error: '發放日不能早於除息日' };
+
+  // 期初持股與配股沒有現金進出,不連動帳戶;其他看使用者有沒有勾選連動
+  const noCash = type === 'initial' || type === 'stock_dividend';
+  const accountId = noCash || !linkAccount ? null : accountIdRaw || null;
+  if (!noCash && linkAccount && !accountId) {
+    return { error: '要連動帳戶餘額的話,請選擇券商帳戶' };
   }
 
   return {
@@ -59,9 +76,10 @@ function parseStockForm(formData: FormData): { error: string } | StockTxnFields 
     name,
     type,
     shares,
-    price,
-    fee: type === 'initial' ? 0 : fee,
+    price: type === 'stock_dividend' ? 0 : price,
+    fee: noCash ? 0 : fee,
     transactionDate,
+    payDate,
     accountId,
   };
 }
@@ -92,6 +110,7 @@ function toRow(f: StockTxnFields) {
     price: f.price,
     fee: f.fee,
     transaction_date: f.transactionDate,
+    pay_date: f.payDate,
   };
 }
 

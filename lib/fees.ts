@@ -59,3 +59,42 @@ export function estimateTwFee(
   const tax = Math.floor(cents(amount * rate));
   return { fee, tax, total: fee + tax, taxLabel: label };
 }
+
+// ---------------------------------------------------------------------------
+// 現金股利的扣款
+// ---------------------------------------------------------------------------
+
+/** 二代健保補充保費:單次給付 2 萬元以上,扣 2.11%,元以下四捨五入 */
+export const NHI_RATE = 0.0211;
+export const NHI_THRESHOLD = 20000;
+
+/** 美股配息由美國預扣 30% 的稅(沒有申請租稅協定的一般情況) */
+export const US_DIVIDEND_WITHHOLDING = 0.3;
+
+export interface DividendDeduction {
+  amount: number;
+  label: string;
+}
+
+/**
+ * 估算現金股利會被扣掉多少 —— 只是表單預設值,使用者照入帳紀錄改。
+ *
+ * ETF 的配息有一部分(收益平準金)不扣二代健保,這裡不知道比例,所以照全額估,
+ * 通常會估得比實際多一點。
+ */
+export function estimateDividendDeduction(
+  market: 'TW' | 'US',
+  gross: number
+): DividendDeduction | null {
+  if (!Number.isFinite(gross) || gross <= 0) return null;
+
+  if (market === 'US') {
+    return {
+      amount: Math.round(gross * US_DIVIDEND_WITHHOLDING * 100) / 100,
+      label: '美國預扣稅 30%',
+    };
+  }
+
+  if (gross < NHI_THRESHOLD) return { amount: 0, label: '未達 2 萬元,不扣二代健保' };
+  return { amount: Math.round(gross * NHI_RATE), label: '二代健保 2.11%' };
+}

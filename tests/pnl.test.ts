@@ -642,3 +642,68 @@ test('沒給價格日期時 priceDate 是 null,舊的呼叫方式照常運作', 
   const rows = computeHoldingPnl(partialDay.txns, '2026-09-29', buildPriceLookup(partialDay.prices));
   assert.ok(rows.every((r) => r.priceDate === null));
 });
+
+// --- 除息日與除權日的盈虧 -----------------------------------------------------
+
+test('除息日:股價下跌被股利抵銷,只剩二代健保那一點是真正的成本', () => {
+  // 100,000 股 × 10.00 → 除息 0.2 後 9.80;股利 20,000 扣二代健保 422
+  const trades = groupTradesByDate([
+    trade({ type: 'dividend', shares: 100000, price: 0.2, fee: 422, transaction_date: '2026-09-17' }),
+  ]);
+  const [row] = computeDailyPnl(
+    new Map([
+      ['2026-09-16', 1000000],
+      ['2026-09-17', 980000],
+    ]),
+    trades,
+    ['2026-09-17']
+  );
+  assert.equal(row.pnl, -422, '沒有股利的話會顯示成虧 2 萬');
+  assert.equal(row.trades?.dividend, 1);
+  assert.equal(row.trades?.dividendIncome, 19578);
+});
+
+test('除權日:多出來的股數本身就在市值裡,不需要另外調整', () => {
+  // 1,000 股 × 100 → 配 50 股,除權參考價 95.24 → 1,050 × 95.24 = 100,002
+  const trades = groupTradesByDate([
+    trade({ type: 'stock_dividend', shares: 50, price: 0, fee: 0, transaction_date: '2026-09-23' }),
+  ]);
+  const [row] = computeDailyPnl(
+    new Map([
+      ['2026-09-22', 100000],
+      ['2026-09-23', 100002],
+    ]),
+    trades,
+    ['2026-09-23']
+  );
+  assert.equal(row.pnl, 2, '除權的價差被多出來的股數抵銷');
+  assert.equal(row.trades?.stockDividend, 1);
+  assert.equal(row.trades?.adjustment, 0);
+});
+
+test('除息日的單日明細:那一檔的盈虧含股利,加總等於格子', () => {
+  const txns = [
+    stockTxn({ id: 'a', symbol: '00712', shares: 250000, price: 8.94, transaction_date: '2026-05-13' }),
+    stockTxn({ id: 'b', symbol: '00712', type: 'dividend', shares: 250000, price: 0.2, fee: 1055, transaction_date: '2026-09-17' }),
+  ];
+  const prices = buildPriceLookup([
+    { symbol: '00712', price_date: '2026-09-16', close_price: 8.1 },
+    { symbol: '00712', price_date: '2026-09-17', close_price: 7.9 },
+  ]);
+  const [row] = computeHoldingPnl(txns, '2026-09-17', prices);
+  // 市值 −50,000(8.10 → 7.90),股利實收 +48,945
+  assert.equal(row.pnl, -1055);
+  assert.equal(row.trades.length, 1);
+});
+
+test('沒持股那天記了股利,明細也要列出來,否則跟格子對不起來', () => {
+  const txns = [
+    stockTxn({ id: 'a', symbol: '00687B', shares: 77000, price: 31, transaction_date: '2026-05-13' }),
+    stockTxn({ id: 'b', symbol: '00687B', type: 'sell', shares: 77000, price: 26.3, fee: 0, transaction_date: '2026-09-24' }),
+    // 除息日填錯成賣出之後
+    stockTxn({ id: 'c', symbol: '00687B', type: 'dividend', shares: 77000, price: 0.335, fee: 0, transaction_date: '2026-09-30' }),
+  ];
+  const rows = computeHoldingPnl(txns, '2026-09-30', () => 26);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].pnl, 25795);
+});

@@ -4,11 +4,10 @@ import { useActionState, useEffect, useRef, useState } from 'react';
 import NumberInput from '@/components/NumberInput';
 import Sheet from '@/components/Sheet';
 import { addStockTransaction, updateStockTransaction } from '@/app/actions/stocks';
-import { estimateTwFee } from '@/lib/fees';
+import { estimateDividendDeduction, estimateTwFee } from '@/lib/fees';
 import { formatNumber, formatNumberInput, parseNumberInput, todayInTaipei } from '@/lib/format';
+import type { StockTxnType } from '@/lib/holdings';
 import type { AccountBalance } from '@/lib/types';
-
-type StockTxnType = 'initial' | 'buy' | 'sell';
 
 interface Suggestion {
   symbol: string;
@@ -19,11 +18,30 @@ const TYPES: { key: StockTxnType; label: string; hint: string }[] = [
   { key: 'buy', label: '買進', hint: '會從券商帳戶扣款(股數 × 價格 + 手續費)' },
   { key: 'sell', label: '賣出', hint: '會存回券商帳戶(股數 × 價格 − 手續費與稅)' },
   {
+    key: 'dividend',
+    label: '現金股利',
+    hint: '股數填除息日前一天收盤時的持股。盈虧算在除息日;有連動的話,錢在發放日存入券商帳戶',
+  },
+  {
+    key: 'stock_dividend',
+    label: '配股',
+    hint: '股數填配到幾股(例如每千股配 50 股、持有 23,100 股 → 1,155 股)。總成本不變,均價會下降',
+  },
+  {
     key: 'initial',
     label: '期初持股',
     hint: '導入既有持股用:直接填目前的股數與均價,不會連動帳戶餘額',
   },
 ];
+
+/** 每種類型的欄位名稱 */
+const FIELD_LABELS: Record<StockTxnType, { shares: string; price: string; fee: string; date: string }> = {
+  buy: { shares: '股數', price: '成交價', fee: '手續費與稅', date: '交易日期' },
+  sell: { shares: '股數', price: '成交價', fee: '手續費與稅', date: '交易日期' },
+  dividend: { shares: '除息日持股', price: '每股配息', fee: '扣款(二代健保等)', date: '除息日' },
+  stock_dividend: { shares: '配到的股數', price: '', fee: '', date: '除權日' },
+  initial: { shares: '股數', price: '目前均價', fee: '', date: '導入日期' },
+};
 
 /** 編輯模式要帶進來的那一筆 */
 export interface EditingStockTxn {
@@ -36,66 +54,93 @@ export interface EditingStockTxn {
   price: number;
   fee: number;
   transaction_date: string;
+  pay_date: string | null;
   account_id: string | null;
 }
+
+/** 預先填好的新交易(例如「待確認配息」卡片按「記錄」) */
+export type PresetStockTxn = Omit<EditingStockTxn, 'id' | 'account_id'>;
 
 /**
  * 新增與編輯共用同一份表單。
  *
- * 傳入 `editing` 就是編輯模式:觸發按鈕變成列表上的「編輯」小字,欄位帶入原本的值,
- * 送出改呼叫 updateStockTransaction。手續費視為「使用者填過的」,不會被自動估算蓋掉。
+ * - `editing`:編輯模式。觸發按鈕是列表上的「編輯」小字,送出改呼叫 updateStockTransaction。
+ * - `preset`:新增,但欄位先填好。觸發按鈕的文字用 `triggerLabel`。
+ *
+ * 兩種模式的費用都視為「使用者填過的」,不會被自動估算蓋掉。
  */
 export default function StockTransactionForm({
   brokerAccounts,
   editing,
+  preset,
+  triggerLabel,
 }: {
   brokerAccounts: AccountBalance[];
   editing?: EditingStockTxn;
+  preset?: PresetStockTxn;
+  triggerLabel?: string;
 }) {
+  const source = editing ?? preset;
+  // 沒有券商帳戶時預設不勾連動,不然一打開就是一行錯誤訊息
+  const defaultLink = editing ? editing.account_id !== null : brokerAccounts.length > 0;
+
   const [open, setOpen] = useState(false);
-  const [type, setType] = useState<StockTxnType>(editing?.type ?? 'buy');
-  const [linkAccount, setLinkAccount] = useState(editing ? editing.account_id !== null : true);
+  const [type, setType] = useState<StockTxnType>(source?.type ?? 'buy');
+  const [linkAccount, setLinkAccount] = useState(defaultLink);
   const formRef = useRef<HTMLFormElement>(null);
 
   // 代號與名稱改成受控,才有辦法在選了建議之後把名稱自動帶進去
-  const [market, setMarket] = useState<'TW' | 'US'>(editing?.market ?? 'TW');
-  const [symbol, setSymbol] = useState(editing?.symbol ?? '');
-  const [name, setName] = useState(editing?.name ?? '');
+  const [market, setMarket] = useState<'TW' | 'US'>(source?.market ?? 'TW');
+  const [symbol, setSymbol] = useState(source?.symbol ?? '');
+  const [name, setName] = useState(source?.name ?? '');
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [suggestOpen, setSuggestOpen] = useState(false);
   const [highlight, setHighlight] = useState(-1);
 
-  // 手續費要跟著股數、價格、代號、日期自動算,所以這幾個也改成受控
-  const [shares, setShares] = useState(editing ? formatNumberInput(String(editing.shares)) : '');
-  const [price, setPrice] = useState(editing ? String(editing.price) : '');
-  const [date, setDate] = useState(editing?.transaction_date ?? todayInTaipei());
-  const [fee, setFee] = useState(editing ? formatNumberInput(String(editing.fee), 2) : '');
-  // 使用者自己改過手續費之後就不再自動覆蓋,直到按「改回自動計算」。
-  // 編輯時原本的手續費就是使用者填的,一開始就視為改過
-  const [feeEdited, setFeeEdited] = useState(editing !== undefined);
+  // 費用要跟著股數、價格、代號、日期自動算,所以這幾個也改成受控
+  const [shares, setShares] = useState(source ? formatNumberInput(String(source.shares)) : '');
+  const [price, setPrice] = useState(source ? String(source.price) : '');
+  const [date, setDate] = useState(source?.transaction_date ?? todayInTaipei());
+  const [payDate, setPayDate] = useState(source?.pay_date ?? '');
+  const [fee, setFee] = useState(source ? formatNumberInput(String(source.fee), 2) : '');
+  // 使用者自己改過費用之後就不再自動覆蓋,直到按「改回自動計算」。
+  // 編輯與預填時,原本的費用就是算好或填過的,一開始就視為改過
+  const [feeEdited, setFeeEdited] = useState(source !== undefined);
 
-  /** 編輯模式每次打開都從原始資料重來,不留上次沒存的修改 */
+  /** 編輯與預填模式每次打開都從原始資料重來,不留上次沒存的修改 */
   function openSheet() {
-    if (editing) {
-      setType(editing.type);
-      setLinkAccount(editing.account_id !== null);
-      setMarket(editing.market);
-      setSymbol(editing.symbol);
-      setName(editing.name ?? '');
-      setShares(formatNumberInput(String(editing.shares)));
-      setPrice(String(editing.price));
-      setDate(editing.transaction_date);
-      setFee(formatNumberInput(String(editing.fee), 2));
+    if (source) {
+      setType(source.type);
+      setLinkAccount(defaultLink);
+      setMarket(source.market);
+      setSymbol(source.symbol);
+      setName(source.name ?? '');
+      setShares(formatNumberInput(String(source.shares)));
+      setPrice(String(source.price));
+      setDate(source.transaction_date);
+      setPayDate(source.pay_date ?? '');
+      setFee(formatNumberInput(String(source.fee), 2));
       setFeeEdited(true);
     }
     setOpen(true);
   }
 
-  const estimate =
-    market === 'TW' && type !== 'initial'
+  const labels = FIELD_LABELS[type];
+  const hasPrice = type !== 'stock_dividend';
+  const hasFee = type === 'buy' || type === 'sell' || type === 'dividend';
+  const hasCash = type === 'buy' || type === 'sell' || type === 'dividend';
+
+  // 買賣:台股手續費與證交稅;現金股利:二代健保(台股)或預扣稅(美股)
+  const tradeEstimate =
+    market === 'TW' && (type === 'buy' || type === 'sell')
       ? estimateTwFee(type, symbol, parseNumberInput(shares), parseNumberInput(price), date)
       : null;
-  const autoFee = estimate ? formatNumberInput(String(estimate.total)) : '';
+  const dividendEstimate =
+    type === 'dividend'
+      ? estimateDividendDeduction(market, parseNumberInput(shares) * parseNumberInput(price))
+      : null;
+  const autoAmount = tradeEstimate?.total ?? dividendEstimate?.amount ?? null;
+  const autoFee = autoAmount === null ? '' : formatNumberInput(String(autoAmount), 2);
 
   useEffect(() => {
     if (!feeEdited) setFee(autoFee);
@@ -107,7 +152,7 @@ export default function StockTransactionForm({
   );
 
   useEffect(() => {
-    if (state?.ok && editing) {
+    if (state?.ok && source) {
       setOpen(false);
       return;
     }
@@ -119,13 +164,14 @@ export default function StockTransactionForm({
       setShares('');
       setPrice('');
       setFee('');
+      setPayDate('');
       setFeeEdited(false);
       setDate(todayInTaipei());
       setSuggestions([]);
       setSuggestOpen(false);
       setOpen(false);
     }
-    // editing 在同一個元件的生命週期內不會變,只需要跟著 state 跑
+    // source 在同一個元件的生命週期內不會變,只需要跟著 state 跑
   }, [state]);
 
   /*
@@ -187,9 +233,42 @@ export default function StockTransactionForm({
     }
   }
 
-  const formId = `stock-txn-form-${editing?.id ?? 'new'}`;
+  const formId = `stock-txn-form-${editing?.id ?? (preset ? `preset-${preset.symbol}-${preset.transaction_date}-${preset.type}` : 'new')}`;
   const activeType = TYPES.find((t) => t.key === type)!;
-  const isInitial = type === 'initial';
+
+  /** 費用欄底下的說明:怎麼估的,或已經手動改過 */
+  function feeHint() {
+    if (feeEdited && autoFee !== '' && fee !== autoFee) {
+      return (
+        <>
+          已手動修改 ·{' '}
+          <button type="button" className="underline" onClick={() => setFeeEdited(false)}>
+            改回自動計算 {autoFee}
+          </button>
+        </>
+      );
+    }
+    if (tradeEstimate) {
+      return type === 'buy' ? (
+        <>手續費 0.1425%,未含券商折扣</>
+      ) : (
+        <>
+          手續費 {formatNumber(tradeEstimate.fee)} ＋ 證交稅 {formatNumber(tradeEstimate.tax)}(
+          {tradeEstimate.taxLabel})
+        </>
+      );
+    }
+    if (dividendEstimate) {
+      return (
+        <>
+          {dividendEstimate.label};ETF 有一部分可免扣、匯費另計,請以入帳金額為準
+        </>
+      );
+    }
+    if (type === 'dividend') return <>填完股數與每股配息會自動估算</>;
+    if (market === 'US') return <>美股各券商收費不同,請自行填寫</>;
+    return null;
+  }
 
   return (
     <>
@@ -202,9 +281,13 @@ export default function StockTransactionForm({
         >
           編輯
         </button>
+      ) : preset ? (
+        <button type="button" className="btn btn-primary" onClick={openSheet}>
+          {triggerLabel ?? '記錄'}
+        </button>
       ) : (
         <button type="button" className="btn btn-primary" onClick={openSheet}>
-          新增交易
+          {triggerLabel ?? '新增交易'}
         </button>
       )}
 
@@ -213,12 +296,7 @@ export default function StockTransactionForm({
         onClose={() => setOpen(false)}
         title={editing ? '編輯股票交易' : '新增股票交易'}
         footer={
-          <button
-            type="submit"
-            form={formId}
-            className="btn btn-primary w-full"
-            disabled={pending}
-          >
+          <button type="submit" form={formId} className="btn btn-primary w-full" disabled={pending}>
             {pending ? '儲存中…' : '儲存'}
           </button>
         }
@@ -226,7 +304,7 @@ export default function StockTransactionForm({
         <form id={formId} ref={formRef} action={formAction}>
           {editing && <input type="hidden" name="id" value={editing.id} />}
           {/* 交易類型 */}
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-3 gap-2 sm:grid-cols-5">
             {TYPES.map((t) => (
               <label
                 key={t.key}
@@ -296,9 +374,7 @@ export default function StockTransactionForm({
                   aria-expanded={showSuggestions}
                   aria-controls="symbol-suggestions"
                   aria-autocomplete="list"
-                  aria-activedescendant={
-                    highlight >= 0 ? `symbol-option-${highlight}` : undefined
-                  }
+                  aria-activedescendant={highlight >= 0 ? `symbol-option-${highlight}` : undefined}
                 />
 
                 {showSuggestions && (
@@ -319,10 +395,7 @@ export default function StockTransactionForm({
                           onClick={() => pick(s)}
                         >
                           <span className="tnum shrink-0">{s.symbol}</span>
-                          <span
-                            className="min-w-0 truncate"
-                            style={{ color: 'var(--text-secondary)' }}
-                          >
+                          <span className="min-w-0 truncate" style={{ color: 'var(--text-secondary)' }}>
                             {s.name}
                           </span>
                         </button>
@@ -349,7 +422,7 @@ export default function StockTransactionForm({
 
             <div>
               <label className="label" htmlFor="shares">
-                股數
+                {labels.shares}
               </label>
               <NumberInput
                 id="shares"
@@ -362,35 +435,42 @@ export default function StockTransactionForm({
               />
             </div>
 
-            <div>
-              <label className="label" htmlFor="price">
-                {isInitial ? '目前均價' : '成交價'}
-              </label>
-              <input
-                id="price"
-                name="price"
-                type="number"
-                inputMode="decimal"
-                step="0.0001"
-                min="0"
-                className="field"
-                value={price}
-                onChange={(e) => setPrice(e.target.value)}
-                required
-              />
-            </div>
+            {hasPrice ? (
+              <div>
+                <label className="label" htmlFor="price">
+                  {labels.price}
+                </label>
+                <input
+                  id="price"
+                  name="price"
+                  type="number"
+                  inputMode="decimal"
+                  step="0.0001"
+                  min="0"
+                  className="field"
+                  value={price}
+                  onChange={(e) => setPrice(e.target.value)}
+                  required
+                />
+              </div>
+            ) : (
+              // 配股沒有價格,送 0 過去
+              <input type="hidden" name="price" value="0" />
+            )}
 
-            {!isInitial && (
+            {hasFee && (
               <div>
                 <label className="label" htmlFor="fee">
-                  手續費與稅
+                  {labels.fee}
                 </label>
                 <NumberInput
                   id="fee"
                   name="fee"
                   className="field tnum"
                   maxDecimals={2}
-                  placeholder={market === 'TW' ? '填完股數與價格會自動帶出' : '0'}
+                  placeholder={
+                    type === 'dividend' || market === 'TW' ? '填完上面的欄位會自動帶出' : '0'
+                  }
                   value={fee}
                   onChange={(v) => {
                     setFee(v);
@@ -398,36 +478,14 @@ export default function StockTransactionForm({
                   }}
                 />
                 <p className="mt-1 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-                  {feeEdited && autoFee !== '' && fee !== autoFee ? (
-                    <>
-                      已手動修改 ·{' '}
-                      <button
-                        type="button"
-                        className="underline"
-                        onClick={() => setFeeEdited(false)}
-                      >
-                        改回自動計算 {autoFee}
-                      </button>
-                    </>
-                  ) : estimate ? (
-                    type === 'buy' ? (
-                      <>手續費 0.1425%,未含券商折扣</>
-                    ) : (
-                      <>
-                        手續費 {formatNumber(estimate.fee)} ＋ 證交稅{' '}
-                        {formatNumber(estimate.tax)}({estimate.taxLabel})
-                      </>
-                    )
-                  ) : market === 'US' ? (
-                    <>美股各券商收費不同,請自行填寫</>
-                  ) : null}
+                  {feeHint()}
                 </p>
               </div>
             )}
 
             <div>
               <label className="label" htmlFor="transaction_date">
-                {isInitial ? '導入日期' : '交易日期'}
+                {labels.date}
               </label>
               <input
                 id="transaction_date"
@@ -439,10 +497,30 @@ export default function StockTransactionForm({
                 required
               />
             </div>
+
+            {type === 'dividend' && (
+              <div>
+                <label className="label" htmlFor="pay_date">
+                  發放日(選填)
+                </label>
+                <input
+                  id="pay_date"
+                  name="pay_date"
+                  type="date"
+                  className="field"
+                  min={date}
+                  value={payDate}
+                  onChange={(e) => setPayDate(e.target.value)}
+                />
+                <p className="mt-1 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+                  錢入帳的那天。沒填的話,連動的券商帳戶會記在除息日
+                </p>
+              </div>
+            )}
           </div>
 
-          {/* 券商帳戶連動 */}
-          {!isInitial && (
+          {/* 券商帳戶連動:期初持股與配股沒有現金進出 */}
+          {hasCash && (
             <div className="mt-4 rounded-lg p-3" style={{ background: 'var(--surface-sunken)' }}>
               <label className="flex cursor-pointer items-start gap-2.5 text-sm">
                 <input
@@ -453,12 +531,12 @@ export default function StockTransactionForm({
                   className="mt-0.5 h-4 w-4 shrink-0"
                 />
                 <span>
-                  同步更新券商帳戶餘額
+                  {type === 'dividend' ? '股利存入券商帳戶' : '同步更新券商帳戶餘額'}
                   <span
                     className="mt-0.5 block text-xs leading-relaxed"
                     style={{ color: 'var(--text-muted)' }}
                   >
-                    取消勾選的話,這筆交易不會影響任何帳戶餘額
+                    取消勾選的話,這筆不會影響任何帳戶餘額
                   </span>
                 </span>
               </label>
@@ -466,7 +544,7 @@ export default function StockTransactionForm({
               {linkAccount && (
                 <div className="mt-3">
                   <label className="label" htmlFor="account_id">
-                    交割帳戶
+                    {type === 'dividend' ? '入帳帳戶' : '交割帳戶'}
                   </label>
                   {brokerAccounts.length === 0 ? (
                     <p className="text-xs leading-relaxed error-text">
@@ -496,13 +574,11 @@ export default function StockTransactionForm({
           {editing && (
             <p className="mt-4 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
               儲存後持股、均價、已實現損益與券商帳戶餘額會立刻重算。
-              交易日期在昨天以前的話,趨勢圖與日曆會在下一次每日同步時自動重算。
+              日期在昨天以前的話,趨勢圖與日曆會在下一次每日同步時自動重算。
             </p>
           )}
 
-          {state?.error && (
-            <p className="error-text mt-3 text-sm leading-relaxed">{state.error}</p>
-          )}
+          {state?.error && <p className="error-text mt-3 text-sm leading-relaxed">{state.error}</p>}
         </form>
       </Sheet>
     </>

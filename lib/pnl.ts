@@ -18,16 +18,24 @@
  * 錢一直都在,算進去只會產生假的尖峰)。
  */
 
-import { calculateHoldings, type StockTransaction } from './holdings.ts';
+import { calculateHoldings, dividendNet, type StockTransaction } from './holdings.ts';
 
 export interface DayTrades {
   /** 當天導入了幾檔期初持股 */
   initial: number;
   buy: number;
   sell: number;
+  /** 現金股利筆數 */
+  dividend: number;
+  /** 配股筆數 */
+  stockDividend: number;
+  /** 當天的現金股利實收合計 —— 已經算進 adjustment,這裡另外留給畫面顯示 */
+  dividendIncome: number;
   /**
    * 部位變動造成的金額,要從市值變化裡扣掉。
    * 買進記 +(股數×價格＋手續費),賣出記 −(股數×價格−手續費與稅)。
+   * 現金股利記 −實收:除息日股價下跌,股利是同一天的收入,兩者抵銷。
+   * 配股記 0:多出來的股數本身就在市值裡,剛好抵銷除權的價差。
    */
   adjustment: number;
 }
@@ -49,7 +57,7 @@ export interface DailyPnl {
 
 /** 算盈虧與做標記時要看的交易欄位 */
 export interface TradeRow {
-  type: 'initial' | 'buy' | 'sell';
+  type: 'initial' | 'buy' | 'sell' | 'dividend' | 'stock_dividend';
   symbol: string;
   shares: number;
   price: number;
@@ -73,6 +81,9 @@ export function groupTradesByDate(rows: TradeRow[]): Map<string, DayTrades> {
       initial: 0,
       buy: 0,
       sell: 0,
+      dividend: 0,
+      stockDividend: 0,
+      dividendIncome: 0,
       adjustment: 0,
     };
 
@@ -84,9 +95,16 @@ export function groupTradesByDate(rows: TradeRow[]): Map<string, DayTrades> {
     } else if (r.type === 'buy') {
       day.buy += 1;
       day.adjustment += gross + r.fee;
-    } else {
+    } else if (r.type === 'sell') {
       day.sell += 1;
       day.adjustment -= gross - r.fee;
+    } else if (r.type === 'dividend') {
+      const net = dividendNet(r);
+      day.dividend += 1;
+      day.dividendIncome += net;
+      day.adjustment -= net;
+    } else {
+      day.stockDividend += 1;
     }
 
     byDate.set(r.transaction_date, day);
@@ -305,20 +323,24 @@ export function computeHoldingPnl(
     const before = holdPrev.get(symbol);
     const shares = now?.shares ?? 0;
     const prevShares = before?.shares ?? 0;
-    if (shares <= 0 && prevShares <= 0) continue;
+    const trades = todayTrades.filter((t) => t.symbol === symbol) as TradeRow[];
+
+    // 前後都沒持股、當天也沒有任何交易(包括股利)的,才略過 ——
+    // 否則一筆記在沒持股那天的股利會算進格子,卻不出現在明細裡
+    if (shares <= 0 && prevShares <= 0 && trades.length === 0) continue;
 
     // 缺報價時退回成本價,跟快照的規則一致
     const price = priceOn(symbol, date) ?? now?.avgCost ?? 0;
     const prevPrice = priceOn(symbol, prev) ?? before?.avgCost ?? 0;
-
-    const trades = todayTrades.filter((t) => t.symbol === symbol) as TradeRow[];
 
     let adjustment = 0;
     let imported = false;
     for (const t of trades) {
       if (t.type === 'initial') imported = true;
       else if (t.type === 'buy') adjustment += t.shares * t.price + t.fee;
-      else adjustment -= t.shares * t.price - t.fee;
+      else if (t.type === 'sell') adjustment -= t.shares * t.price - t.fee;
+      else if (t.type === 'dividend') adjustment -= dividendNet(t);
+      // 配股:多出來的股數已經在當日市值裡,不需要調整
     }
 
     const prevValue = prevShares * prevPrice;

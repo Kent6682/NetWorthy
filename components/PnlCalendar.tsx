@@ -37,6 +37,10 @@ function describeDay(date: string, row: DailyPnl | undefined, holiday?: string):
   const actions: string[] = [];
   if (row?.trades?.buy) actions.push(`買進 ${row.trades.buy} 筆`);
   if (row?.trades?.sell) actions.push(`賣出 ${row.trades.sell} 筆`);
+  if (row?.trades?.dividend) {
+    actions.push(`現金股利 ${row.trades.dividend} 筆(實收 ${formatMoney(row.trades.dividendIncome)},已算進當日盈虧)`);
+  }
+  if (row?.trades?.stockDividend) actions.push(`配股 ${row.trades.stockDividend} 筆`);
   if (actions.length > 0) parts.push(actions.join('、'));
 
   return parts.join(' · ');
@@ -171,6 +175,9 @@ export default function PnlCalendar({
                   {trades.initial > 0 && <span className="cal-mark" data-kind="initial" />}
                   {trades.buy > 0 && <span className="cal-mark" data-kind="buy" />}
                   {trades.sell > 0 && <span className="cal-mark" data-kind="sell" />}
+                  {trades.dividend + trades.stockDividend > 0 && (
+                    <span className="cal-mark" data-kind="dividend" />
+                  )}
                 </span>
               )}
 
@@ -212,6 +219,9 @@ export default function PnlCalendar({
           <span className="cal-mark" data-kind="sell" />賣出
         </span>
         <span className="flex items-center gap-1.5">
+          <span className="cal-mark" data-kind="dividend" />除息 / 除權
+        </span>
+        <span className="flex items-center gap-1.5">
           <span className="cal-mark" data-kind="initial" />導入既有持股
         </span>
       </div>
@@ -221,6 +231,7 @@ export default function PnlCalendar({
         已經扣掉當天買賣造成的部位變動 ——
         買進 50 萬不是賺 50 萬,那只是現金換成股票;手續費與稅則算成當天的損失。
         導入既有持股的那天不計盈虧,因為那天你既沒賺也沒賠。
+        除息日的股利算在當天 —— 除息造成的股價下跌會被股利抵銷,不會顯示成虧損。
         月合計是當月每一格的加總,百分比的分母是上個月底的股票市值。
         它跟總覽「年度損益」的數字會有一點差距:日曆在導入既有持股那天不算盈虧,年度表則是跟你輸入的成本比。
         國定假日會寫上節日名稱(來自證交所的年度行事曆)。

@@ -3,7 +3,7 @@
  *
  * 每一年當成一段期間來結算:
  *
- *   當年總損益 = 期末股票市值 − 期初股票市值 − 當年買入 + 當年賣出實收
+ *   當年總損益 = 期末股票市值 − 期初股票市值 − 當年買入 + 當年賣出實收 + 當年股利實收
  *   當年已實現 = 當年每筆賣出的(實收價款 − 按均價移出的成本)
  *   當年未實現 = 當年總損益 − 當年已實現
  *
@@ -19,7 +19,7 @@
  * 讓總資產變動,但那不是投資的賺賠。
  */
 
-import { calculateHoldings, type StockTransaction } from './holdings.ts';
+import { calculateHoldings, dividendNet, type StockTransaction } from './holdings.ts';
 import type { Currency } from './types.ts';
 
 export interface YearRow {
@@ -33,10 +33,27 @@ export interface YearRow {
   bought: number;
   /** 當年賣出實收,已扣手續費與稅(台幣) */
   sold: number;
+  /** 當年現金股利實收,已扣二代健保等(台幣) */
+  dividends: number;
   total: number;
+  /** 已實現 = 買賣的已實現 + 股利實收 */
   realized: number;
+  /** 其中買賣的部分 */
+  tradingRealized: number;
   unrealized: number;
+  /**
+   * 股利所得(報稅核對用):現金股利總額、扣掉的二代健保與預扣稅、
+   * 配股以面額 10 元計的股利所得。只是核對用,正式數字以國稅局資料為準。
+   */
+  tax: {
+    cashGross: number;
+    deductions: number;
+    stockPar: number;
+  };
 }
+
+/** 台股配股以面額計入股利所得,絕大多數公司面額是 10 元 */
+const TW_PAR_VALUE = 10;
 
 export interface YearlyInput {
   transactions: StockTransaction[];
@@ -106,21 +123,38 @@ export function computeYearly(input: YearlyInput): YearRow[] {
 
     let bought = 0;
     let sold = 0;
+    let dividends = 0;
+    let cashGross = 0;
+    let stockPar = 0;
     for (const t of transactions) {
       if (t.transaction_date <= start || t.transaction_date > end) continue;
       const amount = t.shares * t.price;
-      if (t.type === 'sell') sold += toTwd(amount - (t.fee ?? 0), t.symbol, t.transaction_date);
-      else bought += toTwd(amount + (t.fee ?? 0), t.symbol, t.transaction_date);
+      const twd = (v: number) => toTwd(v, t.symbol, t.transaction_date);
+
+      if (t.type === 'sell') {
+        sold += twd(amount - (t.fee ?? 0));
+      } else if (t.type === 'dividend') {
+        // 股利在除息日入帳 —— 跟當天股價下跌的那一段同一天算
+        dividends += twd(dividendNet(t));
+        cashGross += twd(amount);
+      } else if (t.type === 'stock_dividend') {
+        // 零成本的股數,不是買入;美股沒有「面額計稅」這回事
+        if (currencyOf(t.symbol) !== 'USD') stockPar += t.shares * TW_PAR_VALUE;
+      } else {
+        // 期初持股與買進
+        bought += twd(amount + (t.fee ?? 0));
+      }
     }
 
     const startValue = valueAt(start);
     const endValue = valueAt(end);
-    const total = endValue - startValue - bought + sold;
+    const total = endValue - startValue - bought + sold + dividends;
     const before = realizedUpTo(start);
-    let realized = 0;
+    let tradingRealized = 0;
     for (const [symbol, cum] of realizedUpTo(end)) {
-      realized += toTwd(cum - (before.get(symbol) ?? 0), symbol, end);
+      tradingRealized += toTwd(cum - (before.get(symbol) ?? 0), symbol, end);
     }
+    const realized = tradingRealized + dividends;
 
     return {
       year,
@@ -128,9 +162,12 @@ export function computeYearly(input: YearlyInput): YearRow[] {
       endValue,
       bought,
       sold,
+      dividends,
       total,
       realized,
+      tradingRealized,
       unrealized: total - realized,
+      tax: { cashGross, deductions: cashGross - dividends, stockPar },
     };
   });
 
@@ -147,8 +184,15 @@ export function sumYears(rows: YearRow[]): YearRow | null {
     endValue: rows[rows.length - 1].endValue,
     bought: sum((r) => r.bought),
     sold: sum((r) => r.sold),
+    dividends: sum((r) => r.dividends),
     total: sum((r) => r.total),
     realized: sum((r) => r.realized),
+    tradingRealized: sum((r) => r.tradingRealized),
     unrealized: sum((r) => r.unrealized),
+    tax: {
+      cashGross: sum((r) => r.tax.cashGross),
+      deductions: sum((r) => r.tax.deductions),
+      stockPar: sum((r) => r.tax.stockPar),
+    },
   };
 }

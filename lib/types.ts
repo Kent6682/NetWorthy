@@ -87,6 +87,8 @@ export const STOCK_TXN_LABEL = {
   initial: '期初持股',
   buy: '買進',
   sell: '賣出',
+  dividend: '現金股利',
+  stock_dividend: '配股',
 } as const;
 
 /** 登入/註冊 Server Action 的回傳型別 */

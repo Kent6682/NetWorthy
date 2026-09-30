@@ -31,6 +31,18 @@ function StaleNote({ row }: { row: HoldingPnl }) {
   );
 }
 
+/** 當天交易的一行說明 —— 股利的每股金額可能有三位小數,不能用 formatPrice 捨掉 */
+function tradeText(t: HoldingPnl['trades'][number]): string {
+  if (t.type === 'stock_dividend') return `配股 ${formatShares(t.shares)} 股`;
+  if (t.type === 'dividend') {
+    const net = Math.max(0, t.shares * t.price - t.fee);
+    return `現金股利 ${formatShares(t.shares)} 股 × ${t.price},實收 ${formatMoney(net)}`;
+  }
+  return `${STOCK_TXN_LABEL[t.type]} ${formatShares(t.shares)} 股 @ ${formatPrice(t.price)}${
+    t.fee > 0 ? `,費用 ${formatMoney(t.fee)}` : ''
+  }`;
+}
+
 function PriceMove({ row }: { row: HoldingPnl }) {
   return (
     <span className="tnum">
@@ -149,9 +161,7 @@ export default function DayDetail({
                     <div className="mt-1.5 text-xs" style={{ color: 'var(--text-secondary)' }}>
                       {row.trades.map((t, i) => (
                         <div key={i} className="tnum">
-                          {STOCK_TXN_LABEL[t.type]} {formatShares(t.shares)} 股 @{' '}
-                          {formatPrice(t.price)}
-                          {t.fee > 0 && `,費用 ${formatMoney(t.fee)}`}
+                          {tradeText(t)}
                         </div>
                       ))}
                     </div>
@@ -193,9 +203,7 @@ export default function DayDetail({
                             className="ml-2 text-xs"
                             style={{ color: 'var(--text-secondary)' }}
                           >
-                            {STOCK_TXN_LABEL[t.type]} {formatShares(t.shares)} @{' '}
-                            {formatPrice(t.price)}
-                            {t.fee > 0 && `(費用 ${formatMoney(t.fee)})`}
+                            {tradeText(t)}
                           </span>
                         ))}
                       </td>

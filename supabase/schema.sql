@@ -177,16 +177,45 @@ create table if not exists public.stock_transactions (
 create index if not exists idx_stock_txn_owner  on public.stock_transactions(owner_id, symbol, transaction_date);
 create index if not exists idx_stock_txn_symbol on public.stock_transactions(symbol);
 
+-- ----------------------------------------------------------------------------
+-- 配息與配股(2026-10 加入)
+--
+--   dividend        現金股利。shares = 除息日持股、price = 每股配息、
+--                   fee = 二代健保與匯費(美股是預扣稅),transaction_date = 除息日
+--   stock_dividend  股票股利(配股)。shares = 配到的股數、price = 0,transaction_date = 除權日
+--
+-- 盈虧算在除息日(那天股價下跌,股利要同一天抵銷);錢真正入帳的發放日另外記在
+-- pay_date,券商帳戶的連動用發放日。
+--
+-- 型別的 check 是建表時寫在欄位上的,create table if not exists 不會改到既有的表,
+-- 所以要明確 drop 再 add,這份 SQL 才能重複執行。
+-- ----------------------------------------------------------------------------
+alter table public.stock_transactions
+  add column if not exists pay_date date;
+
+alter table public.stock_transactions
+  drop constraint if exists stock_transactions_type_check;
+alter table public.stock_transactions
+  add constraint stock_transactions_type_check
+  check (type in ('initial', 'buy', 'sell', 'dividend', 'stock_dividend'));
+
+alter table public.stock_transactions
+  drop constraint if exists stock_transactions_pay_date_check;
+alter table public.stock_transactions
+  add constraint stock_transactions_pay_date_check
+  check (pay_date is null or (type = 'dividend' and pay_date >= transaction_date));
+
 -- 同一人同一檔股票只能有一筆期初持股
 create unique index if not exists uniq_stock_initial
   on public.stock_transactions(owner_id, symbol)
   where type = 'initial';
 
 -- ----------------------------------------------------------------------------
--- 股票買賣自動連動券商帳戶餘額
---   買進 → withdraw(股數 × 價格 + 手續費)
---   賣出 → deposit (股數 × 價格 − 手續費與稅)
---   期初持股(initial)不連動:代表既有部位,不是新的資金進出
+-- 股票交易自動連動券商帳戶餘額
+--   買進     → withdraw(股數 × 價格 + 手續費)
+--   賣出     → deposit (股數 × 價格 − 手續費與稅)
+--   現金股利 → deposit (股數 × 每股配息 − 二代健保等),日期用發放日(沒填就用除息日)
+--   期初持股、配股不連動:前者是既有部位,後者沒有現金進出
 -- ----------------------------------------------------------------------------
 create or replace function public.sync_broker_cash()
 returns trigger
@@ -207,8 +236,8 @@ begin
     return old;
   end if;
 
-  -- 期初持股或未指定帳戶 → 不連動
-  if new.type = 'initial' or new.account_id is null then
+  -- 期初持股、配股或未指定帳戶 → 不連動
+  if new.type in ('initial', 'stock_dividend') or new.account_id is null then
     return new;
   end if;
 
@@ -216,6 +245,7 @@ begin
     v_type   := 'withdraw';
     v_amount := round(new.shares * new.price, 2) + new.fee;
   else
+    -- 賣出與現金股利都是存入,扣掉費用後不會是負數
     v_type   := 'deposit';
     v_amount := round(new.shares * new.price, 2) - new.fee;
     if v_amount < 0 then v_amount := 0; end if;
@@ -224,8 +254,11 @@ begin
   insert into public.account_transactions
     (account_id, type, amount, transaction_date, note, stock_transaction_id)
   values
-    (new.account_id, v_type, v_amount, new.transaction_date,
-     (case when new.type = 'buy' then '買進 ' else '賣出 ' end) || new.symbol,
+    (new.account_id, v_type, v_amount,
+     -- 現金股利在發放日才入帳
+     case when new.type = 'dividend' then coalesce(new.pay_date, new.transaction_date)
+          else new.transaction_date end,
+     (case new.type when 'buy' then '買進 ' when 'sell' then '賣出 ' else '股利 ' end) || new.symbol,
      new.id);
 
   return new;

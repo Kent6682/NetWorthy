@@ -165,3 +165,60 @@ test('查價的日子:每年的前一年底加上今天', () => {
   const txns = [tx('2330', 'buy', 1, 1, 0, '2025-06-02')];
   assert.deepEqual(yearBoundaries(txns, '2026-09-28'), ['2024-12-31', '2025-12-31', '2026-09-28']);
 });
+
+test('2026 實際資料加上今年 5 筆股利:股利算進已實現,也列出買賣與股利各多少', () => {
+  const txns = [
+    tx('00662', 'initial', 26000, 118, 0, '2026-05-13'),
+    tx('00670L', 'initial', 15000, 198.1, 0, '2026-05-13'),
+    tx('00687B', 'initial', 77000, 31, 0, '2026-05-13'),
+    tx('00712', 'initial', 250000, 8.94, 0, '2026-05-13'),
+    tx('2542', 'initial', 23100, 42.7, 0, '2026-05-13'),
+    tx('00687B', 'dividend', 77000, 0.262, 426, '2026-06-16'),
+    tx('00712', 'dividend', 250000, 0.235, 1240, '2026-06-17'),
+    tx('00687B', 'dividend', 77000, 0.335, 544, '2026-09-16'),
+    tx('00712', 'dividend', 250000, 0.2, 1055, '2026-09-17'),
+    tx('2542', 'dividend', 23100, 4, 1950, '2026-09-23'),
+    tx('00687B', 'sell', 77000, 26.3, 2885, '2026-09-24'),
+    tx('00662', 'buy', 16000, 124.4, 2836, '2026-09-24'),
+  ];
+  const prices = buildPriceLookup([
+    { symbol: '00662', price_date: '2026-09-24', close_price: 124.25 },
+    { symbol: '00670L', price_date: '2026-09-24', close_price: 211 },
+    { symbol: '00712', price_date: '2026-09-24', close_price: 7.82 },
+    { symbol: '2542', price_date: '2026-09-24', close_price: 39.5 },
+  ]);
+
+  const [r] = computeYearly({
+    transactions: txns,
+    currencyOf: twd,
+    priceOn: prices,
+    usdToTwdOn: () => 32,
+    today: '2026-09-28',
+  });
+
+  assert.equal(Math.round(r.dividends), 241904);
+  assert.equal(Math.round(r.total), -126037, '−367,941 + 股利 241,904');
+  assert.equal(Math.round(r.tradingRealized), -364785);
+  assert.equal(Math.round(r.realized), -122881);
+  assert.equal(Math.round(r.unrealized), -3156, '股利不影響未實現');
+  assert.equal(Math.round(r.tax.cashGross), 247119);
+  assert.equal(Math.round(r.tax.deductions), 5215);
+  assert.equal(r.tax.stockPar, 0);
+});
+
+test('配股:不是買入,以面額 10 元計入股利所得', () => {
+  const txns = [
+    tx('2542', 'initial', 23100, 42.7, 0, '2026-05-13'),
+    tx('2542', 'stock_dividend', 1155, 0, 0, '2026-09-23'),
+  ];
+  const [r] = computeYearly({
+    transactions: txns,
+    currencyOf: twd,
+    priceOn: () => 40,
+    usdToTwdOn: () => 32,
+    today: '2026-09-28',
+  });
+  assert.equal(Math.round(r.bought), 986370, '配股不算買入');
+  assert.equal(r.tax.stockPar, 11550);
+  assert.equal(r.endValue, 24255 * 40);
+});

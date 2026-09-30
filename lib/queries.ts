@@ -89,7 +89,7 @@ export async function getStockTransactions(ownerIds: string[]): Promise<StockTra
   const data = await selectAll<StockTransaction>((a, b) =>
     supabase
       .from('stock_transactions')
-      .select('id, owner_id, account_id, symbol, type, shares, price, fee, transaction_date, created_at')
+      .select('id, owner_id, account_id, symbol, type, shares, price, fee, transaction_date, pay_date, created_at')
       .in('owner_id', ownerIds)
       .order('transaction_date', { ascending: false })
       .order('id')

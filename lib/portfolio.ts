@@ -131,8 +131,10 @@ export function computeRealizedTwd(
   usdToTwd: number
 ): number {
   const currencyOf = new Map(stocks.map((s) => [s.symbol, s.currency]));
+  // 已實現 = 買賣的已實現 + 股利實收(兩者都是已經落袋、不會再變的錢)
   return calculateHoldings(transactions).reduce(
-    (sum, h) => sum + toTwd(h.realizedPnL, currencyOf.get(h.symbol) ?? 'TWD', usdToTwd),
+    (sum, h) =>
+      sum + toTwd(h.realizedPnL + h.dividendIncome, currencyOf.get(h.symbol) ?? 'TWD', usdToTwd),
     0
   );
 }
