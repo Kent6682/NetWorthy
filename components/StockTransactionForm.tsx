@@ -574,7 +574,7 @@ export default function StockTransactionForm({
           {editing && (
             <p className="mt-4 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
               儲存後持股、均價、已實現損益與券商帳戶餘額會立刻重算。
-              日期在昨天以前的話,趨勢圖與日曆會在下一次每日同步時自動重算。
+              日曆也立刻更新;日期在昨天以前的話,趨勢圖會在下一次每日同步時重算。
             </p>
           )}
 
