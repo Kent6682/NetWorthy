@@ -21,6 +21,7 @@ import {
   monthGrid,
   monthTotal,
   parseDay,
+  stockValueByDate,
   summarizeMonths,
   parseMonth,
   previousDay,
@@ -706,4 +707,62 @@ test('沒持股那天記了股利,明細也要列出來,否則跟格子對不起
   const rows = computeHoldingPnl(txns, '2026-09-30', () => 26);
   assert.equal(rows.length, 1);
   assert.equal(rows[0].pnl, 25795);
+});
+
+// --- 日曆的股票市值改成即時算 -------------------------------------------------
+
+test('即時市值:補記的交易立刻算進去,不用等同步(2026-09-29 的真實情況)', () => {
+  const txns = [
+    stockTxn({ id: 'a', symbol: '00712', shares: 250000, price: 8.94, transaction_date: '2026-05-13' }),
+    // 10/1 才補記的 9/29 買進
+    stockTxn({ id: 'b', symbol: '00712', type: 'buy', shares: 50000, price: 7.57, fee: 539, transaction_date: '2026-09-29' }),
+  ];
+  const prices = buildPriceLookup([
+    { symbol: '00712', price_date: '2026-09-24', close_price: 7.82 },
+    { symbol: '00712', price_date: '2026-09-29', close_price: 7.56 },
+  ]);
+  const values = stockValueByDate(txns, ['2026-09-28', '2026-09-29'], prices, () => false, () => 32);
+
+  assert.equal(values.get('2026-09-28'), 250000 * 7.82);
+  assert.equal(values.get('2026-09-29'), 300000 * 7.56, '新買的 50,000 股要在市值裡');
+
+  const [row] = computeDailyPnl(
+    values,
+    groupTradesByDate([trade({ type: 'buy', shares: 50000, price: 7.57, fee: 539, transaction_date: '2026-09-29' })]),
+    ['2026-09-29']
+  );
+  // 250,000 × (7.56 − 7.82) + 50,000 × (7.56 − 7.57) − 539
+  assert.equal(Math.round(row.pnl!), -66039, '不是 −444,039(舊快照少了新股的市值)');
+});
+
+test('即時市值:第一筆交易之前沒有值,不會被當成持平', () => {
+  const txns = [stockTxn({ id: 'a', transaction_date: '2026-05-13' })];
+  const values = stockValueByDate(txns, ['2026-05-12', '2026-05-13'], () => 500, () => false, () => 32);
+  assert.equal(values.has('2026-05-12'), false);
+  assert.equal(values.get('2026-05-13'), 1000 * 500);
+});
+
+test('即時市值:缺報價退回成本價、美股乘當天匯率,跟快照的規則一樣', () => {
+  const txns = [
+    stockTxn({ id: 'a', symbol: '2330', shares: 1000, price: 500, transaction_date: '2026-01-02' }),
+    stockTxn({ id: 'b', symbol: 'AAPL', shares: 10, price: 200, transaction_date: '2026-01-02' }),
+  ];
+  const values = stockValueByDate(
+    txns,
+    ['2026-01-02'],
+    (s) => (s === 'AAPL' ? 210 : null),
+    (s) => s === 'AAPL',
+    () => 32
+  );
+  assert.equal(values.get('2026-01-02'), 1000 * 500 + 10 * 210 * 32);
+});
+
+test('即時市值:配股後股數增加,市值跟著變', () => {
+  const txns = [
+    stockTxn({ id: 'a', symbol: '2542', shares: 23100, price: 42.7, transaction_date: '2026-05-13' }),
+    stockTxn({ id: 'b', symbol: '2542', type: 'stock_dividend', shares: 1155, price: 0, transaction_date: '2026-09-23' }),
+  ];
+  const values = stockValueByDate(txns, ['2026-09-22', '2026-09-23'], () => 40, () => false, () => 32);
+  assert.equal(values.get('2026-09-22'), 23100 * 40);
+  assert.equal(values.get('2026-09-23'), 24255 * 40);
 });

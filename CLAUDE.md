@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 npm install
 npm run dev      # http://localhost:3000
 npm run build
-npm test         # node --test,171 個測試,不連網(但要先 npm install)
+npm test         # node --test,175 個測試,不連網(但要先 npm install)
 npm run sync     # 手動跑一次每日同步(需 SUPABASE_SERVICE_ROLE_KEY)
 npm run backfill # 從第一筆交易重算所有歷史快照並補抓歷史價格(同上,需金鑰)
 ```
@@ -49,7 +49,7 @@ node --test --experimental-strip-types --test-name-pattern="零股" tests/holdin
    五種交易:`initial`、`buy`、`sell`、`dividend`(現金股利:持股與成本不變,實收計入 `dividendIncome`)、`stock_dividend`(配股:股數增加、總成本不變)。**股利不拿來扣成本**(均價要跟券商一致,長期持有會扣成負數),而是**算進已實現**:已實現 = 買賣的 `realizedPnL` + `dividendIncome`,畫面上拆開顯示。現金股利的 `transaction_date` 是除息日(盈虧算在這天),`pay_date` 是發放日(只影響券商帳戶入帳日)。
    已實現損益的合計要用 `computeRealizedTwd()`,**不能**從 `buildValuedHoldings()` 加總 —— 那份清單濾掉了股數 0 的標的,而全部賣光的那一檔正是已實現損益的來源。
 
-4. **每日盈虧 = `lib/pnl.ts` 算的。** 公式是「股票市值變化 − 當日買進金額 + 當日賣出金額 − 手續費與稅」。**基準刻意是股票市值而不是總資產** —— 用總資產的話,沒勾選「同步更新券商帳戶餘額」的買賣會憑空生出資產(股票增加、現金卻沒減少)。導入既有持股(`initial`)那天不計盈虧,那天既沒賺也沒賠。現金股利的部位變動是負的實收(除息價差被抵銷),配股是 0(股數本身就在市值裡)。現金完全不參與。
+4. **每日盈虧 = `lib/pnl.ts` 算的。** 日曆的每日股票市值由 `stockValueByDate()` **即時**算,**不讀快照** —— 快照要等同步才更新,補記過去的交易後格子會跟單日明細對不起來。快照現在只給首頁趨勢圖與期間變化用。公式是「股票市值變化 − 當日買進金額 + 當日賣出金額 − 手續費與稅」。**基準刻意是股票市值而不是總資產** —— 用總資產的話,沒勾選「同步更新券商帳戶餘額」的買賣會憑空生出資產(股票增加、現金卻沒減少)。導入既有持股(`initial`)那天不計盈虧,那天既沒賺也沒賠。現金股利的部位變動是負的實收(除息價差被抵銷),配股是 0(股數本身就在市值裡)。現金完全不參與。
 
 5. **年度損益 = `lib/yearly.ts` 算的。** 每年結算「期末股票市值 − 期初 − 買入(含期初持股)+ 賣出實收 + 股利實收」,扣掉當年已實現(買賣 + 股利)就是當年未實現 —— 未實現是**當年變動**,不是年底帳面,所以各年能直接相加。首頁「今年未實現 / 今年已實現」兩格讀的是這裡,不是 `computeTotals()`。
 

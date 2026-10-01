@@ -6,8 +6,10 @@ import PnlCalendar from '@/components/PnlCalendar';
 import { todayInTaipei } from '@/lib/format';
 import {
   buildDatedPriceLookup,
+  buildPriceLookup,
   computeDailyPnl,
   computeHoldingPnl,
+  daysInMonth,
   groupTradesByDate,
   incompleteDays,
   monthGrid,
@@ -15,6 +17,7 @@ import {
   parseDay,
   parseMonth,
   previousDay,
+  stockValueByDate,
   summarizeMonths,
   weekdaysInMonth,
   type DailyPnl,
@@ -23,11 +26,12 @@ import {
   getHolidays,
   getPricesInRange,
   getSession,
-  getSnapshotRange,
   getStockTradesInRange,
   getStockTransactions,
   getStocks,
   getTradingDays,
+  getUsdToTwd,
+  getUsdTwdHistory,
   ownerIdsForScope,
   parseScope,
 } from '@/lib/queries';
@@ -75,9 +79,10 @@ export default async function CalendarPage({
   const first = `${year}-01-01`;
   const last = `${year}-12-31`;
 
-  const [snapshots, trades, tradingDays, holidays, allTxns, prices, stocks] = await Promise.all([
-    // 多要前一天,才算得出 1/1 的盈虧
-    getSnapshotRange(scope, session.userId, previousDay(first), last),
+  const [fxRows, { rate: latestUsdTwd }, trades, tradingDays, holidays, allTxns, prices, stocks] =
+    await Promise.all([
+    getUsdTwdHistory(shiftDays(first, -PRICE_LOOKBACK_DAYS), last),
+    getUsdToTwd(),
     getStockTradesInRange(ownerIds, first, last),
     getTradingDays(first, last),
     getHolidays(first, last),
@@ -87,8 +92,28 @@ export default async function CalendarPage({
     getStocks(),
   ]);
 
-  // 盈虧看的是股票市值,不是總資產 —— 詳見 lib/pnl.ts 的說明
-  const stockByDate = new Map(snapshots.map((s) => [s.snapshot_date, Number(s.stock_twd)]));
+  /*
+   * 每天的股票市值**即時算**,不讀每日快照。
+   *
+   * 快照是同步那一刻算的,補記、編輯、刪除過去的交易後要等下一次同步才會更新,
+   * 這段期間格子會跟即時算的單日明細對不起來。即時算的話兩邊永遠一致。
+   * 盈虧看的是股票市值,不是總資產 —— 詳見 lib/pnl.ts 的說明。
+   */
+  const priceOn = buildPriceLookup(prices);
+  const fxOn = buildPriceLookup(fxRows.map((r) => ({ symbol: 'USD', price_date: r.date, close_price: r.rate })));
+  const usdSymbols = new Set(stocks.filter((st) => st.currency === 'USD').map((st) => st.symbol));
+  // 每個日曆天都要有值:星期一的「前一天」是星期日。
+  // 多算前一天才算得出 1/1 的盈虧;今天以後還沒發生,不算。
+  const valueDays = [previousDay(first), ...yearMonths.flatMap((m) => daysInMonth(m))].filter(
+    (d) => d <= today
+  );
+  const stockByDate = stockValueByDate(
+    allTxns,
+    valueDays,
+    priceOn,
+    (symbol) => usdSymbols.has(symbol),
+    (date) => fxOn('USD', date) ?? latestUsdTwd
+  );
 
   /*
    * 有開盤、但持有中的台股有任何一檔還沒拿到當天收盤價的日子,快照是用部分舊價格

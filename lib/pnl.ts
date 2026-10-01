@@ -499,3 +499,54 @@ export function holidayLabel(name: string): string {
   const last = name.split('/').at(-1)!.trim();
   return last.split('暨')[0].trim() || name;
 }
+
+/**
+ * 每一天收盤時的股票市值(台幣),**即時**從交易與收盤價算出來 —— 日曆格子用。
+ *
+ * 以前日曆讀每日快照,但快照是同步那一刻算的:補記、編輯、刪除過去的交易後,
+ * 要等下一次同步才會更新,這段期間格子會跟(即時算的)單日明細對不起來 ——
+ * 2026-10-01 補記 9/29 買進 00712 50,000 股後,格子顯示 −56.7 萬,實際是 −18.9 萬。
+ *
+ * 估值規則跟快照(lib/snapshots.ts 的 computeSnapshotRows)完全相同:
+ * 那天(含)以前的交易算持股 × 那天的收盤價(休市沿用前一個交易日,查不到退回成本價),
+ * 美股乘那天的匯率。
+ *
+ * 只從第一筆交易那天開始給值 —— 更早的日子沒有持股,給 0 會被當成「那天持平」。
+ */
+export function stockValueByDate(
+  txns: StockTransaction[],
+  days: string[],
+  priceOn: (symbol: string, date: string) => number | null,
+  isUsd: (symbol: string) => boolean,
+  usdToTwdOn: (date: string) => number
+): Map<string, number> {
+  const values = new Map<string, number>();
+  if (txns.length === 0) return values;
+
+  const sorted = [...txns].sort((a, b) => a.transaction_date.localeCompare(b.transaction_date));
+  const first = sorted[0].transaction_date;
+
+  // 交易只會越加越多:日期往後走時,只有中間有新交易才重算持股
+  let included = 0;
+  let holdings = calculateHoldings([]);
+
+  for (const day of [...days].sort()) {
+    if (day < first) continue;
+
+    let added = false;
+    while (included < sorted.length && sorted[included].transaction_date <= day) {
+      included += 1;
+      added = true;
+    }
+    if (added) holdings = calculateHoldings(sorted.slice(0, included));
+
+    let total = 0;
+    for (const h of holdings) {
+      if (h.shares <= 0) continue;
+      const value = h.shares * (priceOn(h.symbol, day) ?? h.avgCost);
+      total += isUsd(h.symbol) ? value * usdToTwdOn(day) : value;
+    }
+    values.set(day, total);
+  }
+  return values;
+}

@@ -359,3 +359,23 @@ export async function getDividendDismissals(): Promise<DividendDismissal[]> {
   );
   return rows;
 }
+
+/** 區間內的美元兌台幣匯率,日曆即時估美股市值用 */
+export async function getUsdTwdHistory(
+  from: string,
+  to: string
+): Promise<{ date: string; rate: number }[]> {
+  const supabase = await createClient();
+  const rows = await selectAll<{ rate_date: string; rate: number }>((a, b) =>
+    supabase
+      .from('fx_rates')
+      .select('rate_date, rate')
+      .eq('from_currency', 'USD')
+      .eq('to_currency', 'TWD')
+      .gte('rate_date', from)
+      .lte('rate_date', to)
+      .order('rate_date')
+      .range(a, b)
+  );
+  return rows.map((r) => ({ date: r.rate_date, rate: Number(r.rate) }));
+}
